@@ -1,0 +1,46 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ocrmypdf \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
+    ghostscript \
+    curl \
+    cron \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    PyMuPDF \
+    ocrmypdf \
+    requests \
+    urllib3 \
+    python-dateutil
+
+# Create app directory and subdirectories
+WORKDIR /app
+RUN mkdir -p /app/incoming /app/processed /app/logs
+
+# Copy the unified pipeline script
+COPY unified_ocr_pipeline.py /app/
+COPY run_pipeline.sh /app/
+RUN chmod +x /app/run_pipeline.sh
+
+# Copy crontab for cron mode
+COPY crontab /etc/cron.d/ocr_pipeline
+RUN chmod 0644 /etc/cron.d/ocr_pipeline && \
+    crontab /etc/cron.d/ocr_pipeline
+
+# Create log files
+RUN touch /var/log/cron.log /app/logs/pipeline.log
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV OCR_INCOMING=/app/incoming
+ENV OCR_PROCESSED=/app/processed
+ENV OCR_LOG_LEVEL=INFO
+
+# Default command (can be overridden)
+CMD ["python", "/app/unified_ocr_pipeline.py"]

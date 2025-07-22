@@ -1,0 +1,23 @@
+# Unified OCR Pipeline Cron Schedule
+# Run every 2 minutes during business hours, every 10 minutes otherwise
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Environment variables
+OCR_INCOMING=/app/incoming
+OCR_PROCESSED=/app/processed
+OCR_LOG_LEVEL=INFO
+OLLAMA_HOST=http://ollama:11434
+FM_ENABLED=true
+
+# Business hours (7 AM - 6 PM, Mon-Fri): Every 2 minutes
+*/2 7-18 * * 1-5 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1
+
+# Off hours: Every 10 minutes
+*/10 0-6,19-23 * * 1-5 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1
+*/10 * * * 0,6 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1
+
+# Health check - run every 30 minutes
+*/30 * * * * echo "$(date): Cron health check" >> /app/logs/cron.log
+
+# Empty line required at end
