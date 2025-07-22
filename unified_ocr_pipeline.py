@@ -104,12 +104,12 @@ class UnifiedOCRProcessor:
                 '--deskew', 
                 '--clean',
                 '--force-ocr',
-                '--output-type', 'pdf',
+                '--output-type', 'pdf', '--fast-web-view', '100', '--optimize', '1',
                 str(input_pdf),
                 str(output_pdf)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
             
             if result.returncode == 0:
                 logger.info(f"OCR completed successfully: {input_pdf.name}")
@@ -160,9 +160,9 @@ class UnifiedOCRProcessor:
                 logger.warning("No Router pages found")
             
             # Cleanup
-            doc.close()
+            # doc.close()
             po_doc.close()
-            router_doc.close()
+            router_# doc.close()
             
             return po_doc.page_count > 0, router_doc.page_count > 0
             
