@@ -9,7 +9,7 @@ echo "=============================================="
 # Create directory structure
 echo "📁 Creating directory structure..."
 mkdir -p OCR_INCOMING
-mkdir -p OCRProcessed  
+mkdir -p OCR_PROCESSED  
 mkdir -p logs
 
 # Set permissions
@@ -131,7 +131,7 @@ show_usage() {
     echo ""
     echo "📂 Directory Structure:"
     echo "   OCR_INCOMING/     ← Place your PDF files here"  
-    echo "   OCRProcessed/     ← Processed files appear here"
+    echo "   OCR_PROCESSED/     ← Processed files appear here"
     echo "   logs/             ← System logs"
     echo ""
     echo "🔧 Management Commands:"
@@ -142,7 +142,7 @@ show_usage() {
     echo ""
     echo "📖 Quick Test:"
     echo "   1. Copy a PDF to OCR_INCOMING/"
-    echo "   2. Check OCRProcessed/ for results"
+    echo "   2. Check OCR_PROCESSED/ for results"
     echo "   3. View logs for details"
     echo ""
 }

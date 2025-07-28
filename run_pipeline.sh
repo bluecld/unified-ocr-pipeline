@@ -70,7 +70,7 @@ echo "  - Error folders: $ERROR_COUNT"
 echo "  - Remaining files: $REMAINING_COUNT"
 
 # Clean up old log files (keep last 7 days)
-find /app/logs -name "*.log" -type f -mtime +7 -delete 2>/dev/null || true
+find /app/logs -name "*.log" -type f -mtime +7 -exec rm {} \; 2>/dev/null || true
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Pipeline run complete"
 echo "----------------------------------------"

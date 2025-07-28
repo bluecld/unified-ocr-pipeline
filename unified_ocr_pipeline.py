@@ -254,7 +254,7 @@ Text: {text[:3000]}"""
         if qty_match:
             fields['quantity_shipped'] = int(float(qty_match.group(1)))
         
-        # Part Number with operation
+        # Part Number with operation (e.g., 123456*op01)
         for line in text.splitlines():
             part_match = re.search(r'\b(\d{4,10})\b', line)
             op_match = re.search(r'\*?op(\d{2})', line, re.IGNORECASE)

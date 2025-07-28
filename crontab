@@ -4,11 +4,10 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Environment variables
-OCR_INCOMING=/app/incoming
-OCR_PROCESSED=/app/processed
-OCR_LOG_LEVEL=INFO
-OLLAMA_HOST=http://ollama:11434
-FM_ENABLED=true
+
+# These variables are set in the Dockerfile or docker-compose.yml
+# and passed to the container environment.
+# They are included here for clarity but are not strictly necessary for cron itself.
 
 # Business hours (7 AM - 6 PM, Mon-Fri): Every 2 minutes
 */2 7-18 * * 1-5 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1 || echo "Pipeline failed at $(date)" >> /app/logs/cron_errors.log
