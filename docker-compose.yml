@@ -15,8 +15,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    profiles:
-      - ai  # Only start with --profile ai
 
   # Main OCR Pipeline (Continuous Mode)
   ocr_pipeline:
@@ -44,8 +42,6 @@ services:
       ollama:
         condition: service_healthy
         required: false  # Don't require Ollama
-    profiles:
-      - continuous
 
   # Cron-based Pipeline (Recommended for production)
   ocr_cron:
@@ -75,8 +71,6 @@ services:
         condition: service_healthy
         required: false
     command: ["cron", "-f"]
-    profiles:
-      - cron
 
   # One-time processing mode
   ocr_oneshot:
@@ -104,8 +98,6 @@ services:
         condition: service_healthy
         required: false
     command: ["python", "/app/unified_ocr_pipeline.py"]
-    profiles:
-      - oneshot
 
 volumes:
   ollama_data:
