@@ -43,4 +43,4 @@ ENV OCR_PROCESSED=/app/processed
 ENV OCR_LOG_LEVEL=INFO
 
 # Default command (can be overridden)
-CMD ["python", "/app/unified_ocr_pipeline.py"]
+CMD ["./run_pipeline.sh"]
