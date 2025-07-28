@@ -160,9 +160,9 @@ class UnifiedOCRProcessor:
                 logger.warning("No Router pages found")
             
             # Cleanup
-            # doc.close()
+            doc.close()
             po_doc.close()
-            router_# doc.close()
+            router_doc.close()
             
             return po_doc.page_count > 0, router_doc.page_count > 0
             
