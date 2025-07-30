@@ -61,12 +61,12 @@ create_directories() {
     log "📁 Creating directory structure..."
     
     mkdir -p OCR_INCOMING
-    mkdir -p OCRProcessed
+    mkdir -p OCR_PROCESSED
     mkdir -p logs
     mkdir -p temp
     
     # Set proper permissions
-    chmod 755 OCR_INCOMING OCRProcessed logs temp
+    chmod 755 OCR_INCOMING OCR_PROCESSED logs temp
     
     log "✅ Directory structure created"
 }
@@ -84,7 +84,7 @@ configure_environment() {
     # Get current directory paths for Docker volumes
     CURRENT_DIR=$(pwd)
     export HOST_INCOMING_DIR="$CURRENT_DIR/OCR_INCOMING"
-    export HOST_PROCESSED_DIR="$CURRENT_DIR/OCRProcessed"
+    export HOST_PROCESSED_DIR="$CURRENT_DIR/OCR_PROCESSED"
     export HOST_LOG_DIR="$CURRENT_DIR/logs"
     
     # Update docker-compose.yml with correct paths if needed
@@ -339,7 +339,7 @@ EOF
             rm -f test_po.ps test_po.txt
             
             log "Test PDF created: OCR_INCOMING/test_po.pdf"
-            log "Monitor OCRProcessed/ directory for results"
+            log "Monitor OCR_PROCESSED/ directory for results"
             
             # If oneshot mode, the test already ran
             if [[ "$COMPOSE_PROFILE" != *"oneshot"* ]]; then
@@ -360,7 +360,7 @@ show_usage() {
     echo ""
     echo -e "${BLUE}📂 Directory Structure:${NC}"
     echo "   OCR_INCOMING/      ← Place your PDF files here"
-    echo "   OCRProcessed/      ← Processed files organized by PO number"
+    echo "   OCR_PROCESSED/      ← Processed files organized by PO number"
     echo "   ├── PO_4551234567/ ← Successful processing"
     echo "   │   ├── 4551234567_PO.pdf"
     echo "   │   ├── 4551234567_ROUTER.pdf"
