@@ -70,4 +70,5 @@ debug_*.txt
 
 # Temporary files
 *.tmp
-*.temp
+*.tempOCR_PROCESSED/*
+!OCR_PROCESSED/.gitkeep
