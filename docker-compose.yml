@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # Optional Ollama service for enhanced extraction
   ollama:
@@ -34,14 +32,14 @@ services:
       - FM_USERNAME=Anthony
       - FM_PASSWORD=rynrin12
     volumes:
-      - ./OCR_INCOMING:/app/incoming
-      - ./OCRProcessed:/app/processed
-      - ./logs:/app/logs
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
     restart: unless-stopped
     depends_on:
       ollama:
         condition: service_healthy
-        required: false  # Don't require Ollama
+        required: false
 
   # Cron-based Pipeline (Recommended for production)
   ocr_cron:
@@ -61,10 +59,10 @@ services:
       - FM_USERNAME=Anthony
       - FM_PASSWORD=rynrin12
     volumes:
-      - ./OCR_INCOMING:/app/incoming
-      - ./OCRProcessed:/app/processed
-      - ./logs:/app/logs
-      - ./crontab:/etc/cron.d/ocr_pipeline
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\crontab:/etc/cron.d/ocr_pipeline"
     restart: unless-stopped
     depends_on:
       ollama:
@@ -90,9 +88,9 @@ services:
       - FM_USERNAME=Anthony
       - FM_PASSWORD=rynrin12
     volumes:
-      - ./OCR_INCOMING:/app/incoming
-      - ./OCRProcessed:/app/processed
-      - ./logs:/app/logs
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
     depends_on:
       ollama:
         condition: service_healthy
