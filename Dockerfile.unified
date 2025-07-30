@@ -1,17 +1,16 @@
 FROM python:3.10-slim
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ocrmypdf \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
     ghostscript \
+    qpdf \
     curl \
     cron \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 RUN pip install --no-cache-dir \
     PyMuPDF \
     ocrmypdf \
@@ -19,14 +18,9 @@ RUN pip install --no-cache-dir \
     urllib3 \
     python-dateutil
 
-# Set working directory (this will be your bind-mounted folder)
-WORKDIR /workspaces/unified_ocr_pipeline
+WORKDIR /app
+COPY . /app
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV OCR_INCOMING=/workspaces/unified_ocr_pipeline/OCR_INCOMING
-ENV OCR_PROCESSED=/workspaces/unified_ocr_pipeline/OCR_Processed
-ENV OCR_LOG_LEVEL=INFO
 
-# Optional: Set default command if nothing is overridden
-CMD ["bash"]
+CMD ["python3", "unified_ocr_pipeline.py"]

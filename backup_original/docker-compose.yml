@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # Optional Ollama service for AI-enhanced extraction
+  # Optional Ollama service for enhanced extraction
   ollama:
     image: ollama/ollama:latest
     container_name: ocr_ollama
@@ -15,7 +13,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    profiles: ["ai", "complete"]
 
   # Main OCR Pipeline (Continuous Mode)
   ocr_pipeline:
@@ -23,23 +20,26 @@ services:
       context: .
       dockerfile: Dockerfile.unified
     container_name: ocr_pipeline
-    env_file: .env
     environment:
       - OCR_INCOMING=/app/incoming
       - OCR_PROCESSED=/app/processed
       - OCR_LOG_LEVEL=INFO
       - OLLAMA_HOST=http://ollama:11434
+      - FM_ENABLED=true
+      - FM_HOST=192.168.0.39
+      - FM_DB=PreInventory
+      - FM_LAYOUT=PreInventory
+      - FM_USERNAME=Anthony
+      - FM_PASSWORD=rynrin12
     volumes:
-      - "${HOST_INCOMING_DIR:-./OCR_INCOMING}:/app/incoming"
-      - "${HOST_PROCESSED_DIR:-./OCRProcessed}:/app/processed"
-      - "${HOST_LOG_DIR:-./logs}:/app/logs"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
     restart: unless-stopped
     depends_on:
       ollama:
         condition: service_healthy
         required: false
-    profiles: ["continuous"]
-    command: ["python3", "/app/unified_ocr_pipeline.py"]
 
   # Cron-based Pipeline (Recommended for production)
   ocr_cron:
@@ -47,23 +47,27 @@ services:
       context: .
       dockerfile: Dockerfile.unified
     container_name: ocr_cron
-    env_file: .env
     environment:
       - OCR_INCOMING=/app/incoming
       - OCR_PROCESSED=/app/processed
       - OCR_LOG_LEVEL=INFO
       - OLLAMA_HOST=http://ollama:11434
+      - FM_ENABLED=true
+      - FM_HOST=192.168.0.39
+      - FM_DB=PreInventory
+      - FM_LAYOUT=PreInventory
+      - FM_USERNAME=Anthony
+      - FM_PASSWORD=rynrin12
     volumes:
-      - "${HOST_INCOMING_DIR:-./OCR_INCOMING}:/app/incoming"
-      - "${HOST_PROCESSED_DIR:-./OCRProcessed}:/app/processed"
-      - "${HOST_LOG_DIR:-./logs}:/app/logs"
-      - "./crontab:/etc/cron.d/ocr_pipeline"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\crontab:/etc/cron.d/ocr_pipeline"
     restart: unless-stopped
     depends_on:
       ollama:
         condition: service_healthy
         required: false
-    profiles: ["cron", "production"]
     command: ["cron", "-f"]
 
   # One-time processing mode
@@ -72,22 +76,26 @@ services:
       context: .
       dockerfile: Dockerfile.unified
     container_name: ocr_oneshot
-    env_file: .env
     environment:
       - OCR_INCOMING=/app/incoming
       - OCR_PROCESSED=/app/processed
-      - OCR_LOG_LEVEL=DEBUG
+      - OCR_LOG_LEVEL=INFO
       - OLLAMA_HOST=http://ollama:11434
+      - FM_ENABLED=true
+      - FM_HOST=192.168.0.39
+      - FM_DB=PreInventory
+      - FM_LAYOUT=PreInventory
+      - FM_USERNAME=Anthony
+      - FM_PASSWORD=rynrin12
     volumes:
-      - "${HOST_INCOMING_DIR:-./OCR_INCOMING}:/app/incoming"
-      - "${HOST_PROCESSED_DIR:-./OCRProcessed}:/app/processed"
-      - "${HOST_LOG_DIR:-./logs}:/app/logs"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_INCOMING:/app/incoming"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\OCR_Processed:/app/processed"
+      - "Z:\\Main\\scripts\\unified_ocr_pipeline\\logs:/app/logs"
     depends_on:
       ollama:
         condition: service_healthy
         required: false
-    profiles: ["oneshot", "test"]
-    command: ["python3", "/app/unified_ocr_pipeline.py"]
+    command: ["python", "/app/unified_ocr_pipeline.py"]
 
 volumes:
   ollama_data:
@@ -95,4 +103,3 @@ volumes:
 networks:
   default:
     name: ocr_network
-    driver: bridge

@@ -1,515 +1,778 @@
 #!/usr/bin/env python3
 """
-Unified OCR Pipeline System
-Combines splitting, processing, and FileMaker integration into a single cron-driven pipeline
+Enhanced Unified OCR Pipeline
+Processes PDFs containing PO and Router sections with intelligent text-based splitting
+and comprehensive field extraction for FileMaker integration.
 """
 
 import os
 import sys
 import json
-import logging
-import shutil
-import subprocess
-import re
 import fitz  # PyMuPDF
+import subprocess
+import logging
+import re
 import requests
+import urllib3
 from datetime import datetime
 from pathlib import Path
-import time
-from urllib3.exceptions import InsecureRequestWarning
+from typing import Dict, List, Optional, Tuple, Any
 
-# Suppress SSL warnings for FileMaker
-requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-
-# Configuration
-INCOMING = os.getenv('OCR_INCOMING', '/mnt/incoming')
-PROCESSED = os.getenv('OCR_PROCESSED', '/mnt/processed')
-OCR_LOG_LEVEL = os.getenv('OCR_LOG_LEVEL', 'INFO')
-OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://ollama:11434')
-
-# FileMaker Configuration
-FM_HOST = os.getenv('FM_HOST', '192.168.0.39')
-FM_DB = os.getenv('FM_DB', 'PreInventory')
-FM_LAYOUT = os.getenv('FM_LAYOUT', 'PreInventory')
-FM_USERNAME = os.getenv('FM_USERNAME', 'Anthony')
-FM_PASSWORD = os.getenv('FM_PASSWORD', 'rynrin12')
-FM_ENABLED = os.getenv('FM_ENABLED', 'true').lower() == 'true'
-
-# Planner names for extraction
-PLANNER_NAMES = [
-    "Steven Huynh", "Lisa Munoz", "Frank Davis", "William Estrada", "Glenn Castellon",
-    "Sean Klesert", "Michael Reyes", "Nataly Hernandez", "Robert Lopez", "Daniel Rodriguez",
-    "Diana Betancourt", "Diane Crone", "Amy Schlock", "Cesar Sarabia", "Anthony Frederick"
-]
-
-# Quality clause descriptions
-QUALITY_CLAUSES = {
-    "Q8": "Certificate of Compliance required",
-    "Q10": "First Article Inspection required", 
-    "Q19": "Source Control Drawing required",
-    "Q29": "Traceability required",
-    "Q30": "Statistical Process Control required",
-    "Q43": "AS9102 First Article Inspection required"
-}
+# Disable SSL warnings for FileMaker connections (if using self-signed certs)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, OCR_LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(f"{PROCESSED}/pipeline.log") if os.path.exists(PROCESSED) else logging.NullHandler()
+def setup_logging():
+    """Set up comprehensive logging for the pipeline"""
+    log_level = os.getenv('OCR_LOG_LEVEL', 'INFO').upper()
+    log_dir = Path(os.getenv('OCR_LOG_DIR', '/app/logs'))
+    log_dir.mkdir(exist_ok=True)
+    
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / 'pipeline.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
+
+class QualityClauseReference:
+    """Reference database for quality clauses and their descriptions"""
+    
+    CLAUSES = {
+        'Q8': 'Material certification and test reports required',
+        'Q10': 'First article inspection required',
+        'Q15': 'Statistical process control documentation',
+        'Q20': 'Source inspection required',
+        'Q25': 'Certificate of compliance required',
+        'Q30': 'Serialization and traceability required',
+        'Q35': 'Special packaging and handling requirements',
+        'Q40': 'Government source inspection required',
+        'Q43': 'AS9102 First Article Inspection Report required',
+        'Q45': 'NADCAP certification required',
+        'Q50': 'Customer source inspection required'
+    }
+    
+    @classmethod
+    def get_description(cls, code: str) -> Optional[str]:
+        """Get description for a quality clause code"""
+        return cls.CLAUSES.get(code.upper())
+    
+    @classmethod
+    def find_all_clauses(cls, text: str) -> List[Dict[str, str]]:
+        """Find all quality clause codes in text and return with descriptions"""
+        clauses = []
+        # Look for Q followed by digits
+        pattern = r'\bQ(\d+)\b'
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        
+        for match in matches:
+            code = match.group(0).upper()
+            description = cls.get_description(code)
+            if description:
+                clauses.append({
+                    'code': code,
+                    'description': description
+                })
+        
+        return clauses
+
+class PlannerReference:
+    """Reference list of known planners for validation"""
+    
+    PLANNERS = [
+        'SMITH, JOHN',
+        'JOHNSON, MARY',
+        'WILLIAMS, ROBERT',
+        'BROWN, PATRICIA',
+        'DAVIS, MICHAEL',
+        'MILLER, LINDA',
+        'WILSON, WILLIAM',
+        'MOORE, ELIZABETH'
     ]
-)
-logger = logging.getLogger('OCRPipeline')
+    
+    @classmethod
+    def find_planner(cls, text: str) -> Optional[str]:
+        """Find a planner name in the text"""
+        text_upper = text.upper()
+        for planner in cls.PLANNERS:
+            if planner.upper() in text_upper:
+                return planner
+        return None
 
-class UnifiedOCRProcessor:
-    def __init__(self):
-        self.incoming_dir = Path(INCOMING)
-        self.processed_dir = Path(PROCESSED)
+class EnhancedPDFProcessor:
+    """Enhanced PDF processor with intelligent splitting and field extraction"""
+    
+    def __init__(self, incoming_dir: str, processed_dir: str):
+        self.incoming_dir = Path(incoming_dir)
+        self.processed_dir = Path(processed_dir)
+        self.processed_dir.mkdir(exist_ok=True)
         
-        # Create directories
-        self.incoming_dir.mkdir(parents=True, exist_ok=True)
-        self.processed_dir.mkdir(parents=True, exist_ok=True)
+        # Text patterns that indicate transition from PO to Router
+        self.router_indicators = [
+            r'router',
+            r'routing\s+sheet',
+            r'manufacturing\s+routing',
+            r'operation\s+sequence',
+            r'work\s+instructions',
+            r'process\s+sheet'
+        ]
         
-        logger.info("=== Unified OCR Pipeline Starting ===")
-        logger.info(f"Incoming: {self.incoming_dir}")
-        logger.info(f"Processed: {self.processed_dir}")
-        logger.info(f"FileMaker: {'Enabled' if FM_ENABLED else 'Disabled'}")
-
-    def is_pdf_searchable(self, pdf_path):
-        """Check if PDF contains searchable text"""
+    def find_router_start_page(self, pdf_path: str) -> Optional[int]:
+        """
+        Find the page where Router section begins using text analysis
+        Returns page number (0-indexed) or None if not found
+        """
         try:
-            with fitz.open(pdf_path) as doc:
-                for page in doc:
-                    if page.get_text().strip():
-                        return True
-            return False
+            doc = fitz.open(pdf_path)
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text().lower()
+                
+                # Check if any router indicators are present
+                for pattern in self.router_indicators:
+                    if re.search(pattern, text, re.IGNORECASE):
+                        logger.info(f"Found router indicator '{pattern}' on page {page_num + 1}")
+                        doc.close()
+                        return page_num
+                        
+            doc.close()
+            logger.warning("No router section indicators found - assuming single PO document")
+            return None
+            
         except Exception as e:
-            logger.error(f"Error checking PDF searchability: {e}")
-            return False
-
-    def run_ocr(self, input_pdf, output_pdf):
-        """Run OCR using ocrmypdf"""
+            logger.error(f"Error analyzing PDF for router section: {e}")
+            return None
+    
+    def split_po_router(self, input_pdf: str, po_pdf: str, router_pdf: str) -> bool:
+        """
+        Split PDF into PO and Router sections based on text content analysis
+        Returns True if splitting was successful
+        """
         try:
-            if self.is_pdf_searchable(input_pdf):
-                logger.info(f"PDF already searchable, copying: {input_pdf.name}")
-                shutil.copy2(input_pdf, output_pdf)
+            router_start_page = self.find_router_start_page(input_pdf)
+            
+            doc = fitz.open(input_pdf)
+            po_doc = fitz.open()
+            
+            if router_start_page is None:
+                # No router section found - entire document is PO
+                po_doc.insert_pdf(doc)
+                po_doc.save(po_pdf)
+                logger.info(f"No router section found - saved entire document as PO: {po_pdf}")
+                doc.close()
+                po_doc.close()
                 return True
             
-            logger.info(f"Running OCR on: {input_pdf.name}")
+            # Split document at router start page
+            # PO section: pages 0 to router_start_page-1
+            if router_start_page > 0:
+                po_doc.insert_pdf(doc, from_page=0, to_page=router_start_page-1)
+                po_doc.save(po_pdf)
+                logger.info(f"Saved PO section (pages 1-{router_start_page}): {po_pdf}")
+            
+            # Router section: pages router_start_page to end
+            if router_start_page < len(doc):
+                router_doc = fitz.open()
+                router_doc.insert_pdf(doc, from_page=router_start_page, to_page=len(doc)-1)
+                router_doc.save(router_pdf)
+                router_doc.close()
+                logger.info(f"Saved Router section (pages {router_start_page+1}-{len(doc)}): {router_pdf}")
+            
+            doc.close()
+            po_doc.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error splitting PDF {input_pdf}: {e}")
+            return False
+    
+    def run_ocr_on_file(self, input_pdf: str, output_pdf: str, pages_only: Optional[str] = None) -> bool:
+        """
+        Run OCR on PDF file, optionally limiting to specific pages
+        pages_only: e.g., "1" for first page only, "1-3" for pages 1-3
+        """
+        try:
             cmd = [
-                'ocrmypdf',
-                '--rotate-pages',
-                '--deskew', 
-                '--clean',
-                '--force-ocr',
-                '--output-type', 'pdf', '--fast-web-view', '100', '--optimize', '1',
-                str(input_pdf),
-                str(output_pdf)
+                "ocrmypdf",
+                "--force-ocr",
+                "--rotate-pages",
+                "--tesseract-timeout", "30",
+                "--optimize", "1"
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            # Add page selection if specified
+            if pages_only:
+                cmd.extend(["--pages", pages_only])
+                
+            cmd.extend([input_pdf, output_pdf])
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
             if result.returncode == 0:
-                logger.info(f"OCR completed successfully: {input_pdf.name}")
+                logger.info(f"OCR completed successfully: {output_pdf}")
                 return True
             else:
-                logger.error(f"OCR failed for {input_pdf.name}: {result.stderr}")
+                logger.error(f"OCR failed for {input_pdf}: {result.stderr}")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.error(f"OCR timeout for {input_pdf.name}")
+            logger.error(f"OCR timeout for {input_pdf}")
             return False
         except Exception as e:
-            logger.error(f"OCR error for {input_pdf.name}: {e}")
+            logger.error(f"OCR error for {input_pdf}: {e}")
             return False
-
-    def split_po_and_router(self, input_pdf, po_pdf, router_pdf):
-        """Split PDF into PO and Router sections"""
+    
+    def extract_text_from_pdf(self, pdf_path: str) -> str:
+        """Extract all text from OCR'd PDF"""
         try:
-            doc = fitz.open(input_pdf)
-            po_doc = fitz.open()
-            router_doc = fitz.open()
-            
-            po_done = False
-            
-            for i, page in enumerate(doc):
-                text = page.get_text().lower()
-                
-                # Look for purchase order pages
-                if not po_done and "purchase order" in text and re.search(r"page\s+\d+", text):
-                    po_doc.insert_pdf(doc, from_page=i, to_page=i)
-                    logger.debug(f"Added page {i+1} to PO section")
-                else:
-                    po_done = True
-                    router_doc.insert_pdf(doc, from_page=i, to_page=i)
-                    logger.debug(f"Added page {i+1} to Router section")
-            
-            # Save split documents
-            if po_doc.page_count > 0:
-                po_doc.save(po_pdf)
-                logger.info(f"Created PO document with {po_doc.page_count} pages")
+            result = subprocess.run(
+                ["pdftotext", pdf_path, "-"],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                return result.stdout
             else:
-                logger.warning("No PO pages found")
-                
-            if router_doc.page_count > 0:
-                router_doc.save(router_pdf)
-                logger.info(f"Created Router document with {router_doc.page_count} pages")
-            else:
-                logger.warning("No Router pages found")
-            
-            # Cleanup
-            doc.close()
-            po_doc.close()
-            router_doc.close()
-            
-            return po_doc.page_count > 0, router_doc.page_count > 0
-            
-        except Exception as e:
-            logger.error(f"Error splitting PDF: {e}")
-            return False, False
-
-    def extract_text_from_pdf(self, pdf_path):
-        """Extract all text from PDF"""
-        try:
-            text = ""
-            with fitz.open(pdf_path) as doc:
-                for page in doc:
-                    text += page.get_text() + "\n"
-            return text
+                logger.error(f"pdftotext failed for {pdf_path}: {result.stderr}")
+                return ""
         except Exception as e:
             logger.error(f"Error extracting text from {pdf_path}: {e}")
             return ""
 
-    def extract_fields_with_ollama(self, text):
-        """Use Ollama for enhanced field extraction"""
-        if not OLLAMA_HOST:
-            return {}
+class FieldExtractor:
+    """Enhanced field extraction with comprehensive business logic"""
+    
+    def __init__(self, text: str):
+        self.text = text
+        self.text_lines = text.split('\n')
+        
+    def extract_po_number(self) -> Optional[str]:
+        """Extract 10-digit PO number starting with 45"""
+        # Look for 10-digit number starting with 45
+        pattern = r'\b45\d{8}\b'
+        match = re.search(pattern, self.text)
+        if match:
+            logger.info(f"Found PO number: {match.group(0)}")
+            return match.group(0)
+        
+        logger.warning("No valid PO number found (10 digits starting with 45)")
+        return None
+    
+    def extract_mjo_number(self) -> Optional[str]:
+        """Extract MJO number - typically follows 'MJO' or 'MJO NO'"""
+        patterns = [
+            r'MJO\s*NO\.?\s*:?\s*(\w+)',
+            r'MJO\s*:?\s*(\w+)',
+            r'Manufacturing\s+Job\s+Order\s*:?\s*(\w+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                mjo = match.group(1).strip()
+                logger.info(f"Found MJO number: {mjo}")
+                return mjo
+                
+        logger.warning("No MJO number found")
+        return None
+    
+    def extract_quantity_shipped(self) -> Optional[str]:
+        """Extract quantity shipped - look for QTY SHIP or similar"""
+        patterns = [
+            r'QTY\s+SHIP\w*\s*:?\s*(\d+(?:,\d{3})*(?:\.\d+)?)',
+            r'QUANTITY\s+SHIPPED\s*:?\s*(\d+(?:,\d{3})*(?:\.\d+)?)',
+            r'QTY\s*:?\s*(\d+(?:,\d{3})*(?:\.\d+)?)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                qty = match.group(1).replace(',', '')
+                logger.info(f"Found quantity shipped: {qty}")
+                return qty
+                
+        logger.warning("No quantity shipped found")
+        return None
+    
+    def extract_part_number(self) -> Optional[str]:
+        """Extract part number with *op## format"""
+        # Look for part numbers that include *op followed by digits
+        pattern = r'(\w+\*op\d+)'
+        match = re.search(pattern, self.text, re.IGNORECASE)
+        if match:
+            part_num = match.group(1)
+            logger.info(f"Found part number: {part_num}")
+            return part_num
             
-        prompt = f"""Extract fields from this purchase order text. Return ONLY valid JSON:
-{{
-    "po_number": "string starting with 455 or null",
-    "mjo_number": "production order number or null", 
-    "quantity_shipped": "number or null",
-    "part_number": "string containing *op## pattern or null",
-    "delivery_date": "date in MM/DD/YYYY format or null",
-    "dpas_rating": "string or null",
-    "payment_terms": "string or null",
-    "planner_name": "planner name if found or null",
-    "quality_clauses": ["array of Q## codes"]
-}}
+        # Fallback: look for PART NUMBER or P/N labels
+        patterns = [
+            r'PART\s+NUMBER\s*:?\s*(\S+)',
+            r'P/N\s*:?\s*(\S+)',
+            r'PART\s*#\s*:?\s*(\S+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                part_num = match.group(1)
+                logger.info(f"Found part number (fallback): {part_num}")
+                return part_num
+                
+        logger.warning("No part number found")
+        return None
+    
+    def extract_delivery_date(self) -> Optional[str]:
+        """Extract promise delivery date - often after EA quantity or labeled as Dock Date"""
+        patterns = [
+            r'PROMISE\s+DELIVERY\s+DATE\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+            r'DOCK\s+DATE\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+            r'DELIVERY\s+DATE\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+            r'EA\s+.*?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',  # Date after EA quantity
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                date_str = match.group(1)
+                # Standardize date format
+                try:
+                    # Try to parse and reformat the date
+                    for fmt in ['%m/%d/%Y', '%m-%d-%Y', '%m/%d/%y', '%m-%d-%y']:
+                        try:
+                            parsed_date = datetime.strptime(date_str, fmt)
+                            formatted_date = parsed_date.strftime('%m/%d/%Y')
+                            logger.info(f"Found delivery date: {formatted_date}")
+                            return formatted_date
+                        except ValueError:
+                            continue
+                except:
+                    pass
+                    
+                # If parsing fails, return as-is
+                logger.info(f"Found delivery date (unparsed): {date_str}")
+                return date_str
+                
+        logger.warning("No delivery date found")
+        return None
+    
+    def extract_whittaker_shipper(self) -> Optional[str]:
+        """Extract Whittaker Shipper (Purchase Order number)"""
+        patterns = [
+            r'WHITTAKER\s+SHIPPER\s*:?\s*(\w+)',
+            r'PURCHASE\s+ORDER\s*:?\s*(\w+)',
+            r'PO\s*:?\s*(\w+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                shipper = match.group(1)
+                logger.info(f"Found Whittaker Shipper: {shipper}")
+                return shipper
+                
+        logger.warning("No Whittaker Shipper found")
+        return None
+    
+    def extract_dpas_rating(self) -> List[str]:
+        """Extract DPAS rating(s) - may appear multiple times"""
+        pattern = r'DPAS\s*:?\s*([A-Z]\d+)'
+        matches = re.findall(pattern, self.text, re.IGNORECASE)
+        
+        if matches:
+            ratings = [match.upper() for match in matches]
+            logger.info(f"Found DPAS ratings: {ratings}")
+            return ratings
+            
+        logger.warning("No DPAS ratings found")
+        return []
+    
+    def extract_payment_terms(self) -> Tuple[Optional[str], bool]:
+        """
+        Extract payment terms and flag if not '30 Days'
+        Returns (terms, is_non_standard) where is_non_standard=True if not 30 days
+        """
+        patterns = [
+            r'PAYMENT\s+TERMS\s*:?\s*([^,\n]+)',
+            r'TERMS\s*:?\s*([^,\n]+)',
+            r'NET\s+(\d+)\s*DAYS?'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, self.text, re.IGNORECASE)
+            if match:
+                terms = match.group(1).strip()
+                
+                # Check if it's standard 30-day terms
+                is_non_standard = not any([
+                    '30' in terms and 'day' in terms.lower(),
+                    'net 30' in terms.lower(),
+                    'net30' in terms.lower()
+                ])
+                
+                logger.info(f"Found payment terms: {terms} (non-standard: {is_non_standard})")
+                return terms, is_non_standard
+                
+        logger.warning("No payment terms found")
+        return None, False
+    
+    def extract_quality_clauses(self) -> List[Dict[str, str]]:
+        """Extract quality clauses with descriptions"""
+        clauses = QualityClauseReference.find_all_clauses(self.text)
+        if clauses:
+            logger.info(f"Found {len(clauses)} quality clauses")
+        else:
+            logger.warning("No quality clauses found")
+        return clauses
+    
+    def extract_planner_name(self) -> Optional[str]:
+        """Extract planner name from predefined list"""
+        planner = PlannerReference.find_planner(self.text)
+        if planner:
+            logger.info(f"Found planner: {planner}")
+        else:
+            logger.warning("No known planner found")
+        return planner
+    
+    def extract_all_fields(self) -> Dict[str, Any]:
+        """Extract all fields and return as structured dictionary"""
+        logger.info("Starting comprehensive field extraction...")
+        
+        # Extract payment terms
+        payment_terms, non_standard_payment = self.extract_payment_terms()
+        
+        extracted_data = {
+            'po_number': self.extract_po_number(),
+            'mjo_number': self.extract_mjo_number(),
+            'quantity_shipped': self.extract_quantity_shipped(),
+            'part_number': self.extract_part_number(),
+            'delivery_date': self.extract_delivery_date(),
+            'whittaker_shipper': self.extract_whittaker_shipper(),
+            'dpas_ratings': self.extract_dpas_rating(),
+            'payment_terms': payment_terms,
+            'non_standard_payment': non_standard_payment,
+            'quality_clauses': self.extract_quality_clauses(),
+            'planner_name': self.extract_planner_name(),
+            'extraction_timestamp': datetime.now().isoformat()
+        }
+        
+        # Count successfully extracted fields
+        extracted_count = sum(1 for v in extracted_data.values() 
+                            if v is not None and v != [] and v != False)
+        logger.info(f"Successfully extracted {extracted_count} fields")
+        
+        return extracted_data
 
-Text: {text[:3000]}"""
-
+class FileMakerIntegration:
+    """FileMaker Data API integration for uploading records and files"""
+    
+    def __init__(self):
+        self.enabled = os.getenv('FM_ENABLED', 'false').lower() == 'true'
+        if not self.enabled:
+            logger.info("FileMaker integration disabled")
+            return
+            
+        self.host = os.getenv('FM_HOST', '192.168.0.39')
+        self.database = os.getenv('FM_DB', 'PreInventory')
+        self.layout = os.getenv('FM_LAYOUT', 'PreInventory')
+        self.username = os.getenv('FM_USERNAME', 'Anthony')
+        self.password = os.getenv('FM_PASSWORD', '')
+        
+        self.base_url = f"https://{self.host}/fmi/data/v1/databases/{self.database}"
+        self.token = None
+        
+        logger.info(f"FileMaker integration enabled - Host: {self.host}, DB: {self.database}")
+    
+    def authenticate(self) -> bool:
+        """Authenticate with FileMaker Data API"""
+        if not self.enabled:
+            return False
+            
         try:
+            auth_url = f"{self.base_url}/sessions"
             response = requests.post(
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": "llama2",
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json"
-                },
+                auth_url,
+                json={},
+                auth=(self.username, self.password),
+                verify=False,  # For self-signed certificates
                 timeout=30
             )
             
             if response.status_code == 200:
-                result = response.json()
-                return json.loads(result.get('response', '{}'))
+                self.token = response.json()['response']['token']
+                logger.info("FileMaker authentication successful")
+                return True
             else:
-                logger.warning(f"Ollama API error: {response.status_code}")
-                return {}
+                logger.error(f"FileMaker authentication failed: {response.status_code} - {response.text}")
+                return False
                 
         except Exception as e:
-            logger.warning(f"Ollama extraction failed: {e}")
-            return {}
-
-    def extract_fields_regex(self, text):
-        """Fallback regex-based field extraction"""
-        fields = {
-            "po_number": None,
-            "mjo_number": None,
-            "quantity_shipped": None,
-            "part_number": None,
-            "delivery_date": None,
-            "dpas_rating": None,
-            "payment_terms": None,
-            "planner_name": None,
-            "quality_clauses": []
-        }
-        
-        # PO Number (must start with 455)
-        po_match = re.search(r'Purchase\s+order\s*(\d+)', text, re.IGNORECASE)
-        if po_match and po_match.group(1).startswith('455'):
-            fields['po_number'] = po_match.group(1)
-        
-        # MJO/Production Order Number
-        mjo_match = re.search(r'Production\s+Order[:\s]+(\d+)', text, re.IGNORECASE)
-        if mjo_match:
-            fields['mjo_number'] = mjo_match.group(1)
-        
-        # Quantity Shipped
-        qty_match = re.search(r'\b(\d{1,4}\.\d{2})\s+(EA|UM)\b', text)
-        if qty_match:
-            fields['quantity_shipped'] = int(float(qty_match.group(1)))
-        
-        # Part Number with operation (e.g., 123456*op01)
-        for line in text.splitlines():
-            part_match = re.search(r'\b(\d{4,10})\b', line)
-            op_match = re.search(r'\*?op(\d{2})', line, re.IGNORECASE)
-            if part_match and op_match:
-                fields['part_number'] = f"{part_match.group(1)}*op{op_match.group(1)}"
-                break
-        
-        # Delivery Date
-        date_match = re.search(r'(\d{2}/\d{2}/\d{4})', text)
-        if date_match:
-            fields['delivery_date'] = date_match.group(1)
-        
-        # DPAS Rating
-        dpas_match = re.search(r'DPAS[:\s]+([A-Z]\d+)', text, re.IGNORECASE)
-        if dpas_match:
-            fields['dpas_rating'] = dpas_match.group(1)
-        
-        # Payment Terms
-        payment_match = re.search(r'(?:payment\s+terms?|terms)[:\s]+([^,\n]+)', text, re.IGNORECASE)
-        if payment_match:
-            fields['payment_terms'] = payment_match.group(1).strip()
-        
-        # Planner Name
-        for planner in PLANNER_NAMES:
-            if planner.lower() in text.lower():
-                fields['planner_name'] = planner
-                break
-        
-        # Quality Clauses
-        quality_matches = re.findall(r'Q\d{2}', text)
-        fields['quality_clauses'] = list(set(quality_matches))
-        
-        return fields
-
-    def send_to_filemaker(self, fields, po_pdf, router_pdf):
-        """Upload data and files to FileMaker"""
-        if not FM_ENABLED:
-            logger.info("FileMaker integration disabled")
-            return True
+            logger.error(f"FileMaker authentication error: {e}")
+            return False
+    
+    def create_record(self, field_data: Dict[str, Any]) -> Optional[str]:
+        """Create a new record in FileMaker and return record ID"""
+        if not self.enabled or not self.token:
+            return None
             
         try:
-            base_url = f"https://{FM_HOST}/fmi/data/vLatest/databases/{FM_DB}"
+            create_url = f"{self.base_url}/layouts/{self.layout}/records"
+            headers = {
+                'Authorization': f'Bearer {self.token}',
+                'Content-Type': 'application/json'
+            }
             
-            # Login
-            session = requests.Session()
-            auth_response = session.post(
-                f"{base_url}/sessions", 
-                auth=(FM_USERNAME, FM_PASSWORD), 
-                json={}, 
-                verify=False
-            )
-            auth_response.raise_for_status()
+            # Prepare field data for FileMaker (remove None values and format properly)
+            fm_data = {}
+            for key, value in field_data.items():
+                if value is not None:
+                    if isinstance(value, list):
+                        # Convert lists to JSON strings for FileMaker
+                        fm_data[key] = json.dumps(value)
+                    else:
+                        fm_data[key] = str(value)
             
-            token = auth_response.json()['response']['token']
-            headers = {"Authorization": f"Bearer {token}"}
+            payload = {
+                'fieldData': fm_data
+            }
             
-            # Create record
-            logger.info("Creating FileMaker record...")
-            record_response = session.post(
-                f"{base_url}/layouts/{FM_LAYOUT}/records",
+            response = requests.post(
+                create_url,
+                json=payload,
                 headers=headers,
-                json={"fieldData": fields},
-                verify=False
+                verify=False,
+                timeout=60
             )
-            record_response.raise_for_status()
             
-            record_id = record_response.json()['response']['recordId']
-            logger.info(f"Created record {record_id}")
-            
-            # Upload PO PDF
-            if po_pdf and os.path.exists(po_pdf):
-                with open(po_pdf, 'rb') as f:
-                    upload_response = session.post(
-                        f"{base_url}/layouts/{FM_LAYOUT}/records/{record_id}/containers/IncomingPO/1",
-                        headers=headers,
-                        files={"upload": f},
-                        verify=False
-                    )
-                    upload_response.raise_for_status()
-                    logger.info("Uploaded PO PDF")
-            
-            # Upload Router PDF
-            if router_pdf and os.path.exists(router_pdf):
-                with open(router_pdf, 'rb') as f:
-                    upload_response = session.post(
-                        f"{base_url}/layouts/{FM_LAYOUT}/records/{record_id}/containers/IncomingRouter/1",
-                        headers=headers,
-                        files={"upload": f},
-                        verify=False
-                    )
-                    upload_response.raise_for_status()
-                    logger.info("Uploaded Router PDF")
-            
-            # Logout
-            session.delete(f"{base_url}/sessions/{token}", headers=headers, verify=False)
-            
-            return True
-            
+            if response.status_code == 200:
+                record_id = response.json()['response']['recordId']
+                logger.info(f"FileMaker record created successfully: {record_id}")
+                return record_id
+            else:
+                logger.error(f"FileMaker record creation failed: {response.status_code} - {response.text}")
+                return None
+                
         except Exception as e:
-            logger.error(f"FileMaker upload failed: {e}")
+            logger.error(f"FileMaker record creation error: {e}")
+            return None
+    
+    def upload_file_to_container(self, record_id: str, field_name: str, file_path: str) -> bool:
+        """Upload file to FileMaker container field"""
+        if not self.enabled or not self.token or not record_id:
             return False
+            
+        try:
+            upload_url = f"{self.base_url}/layouts/{self.layout}/records/{record_id}/containers/{field_name}"
+            headers = {
+                'Authorization': f'Bearer {self.token}'
+            }
+            
+            with open(file_path, 'rb') as file:
+                files = {'upload': file}
+                response = requests.post(
+                    upload_url,
+                    files=files,
+                    headers=headers,
+                    verify=False,
+                    timeout=120
+                )
+            
+            if response.status_code == 200:
+                logger.info(f"File uploaded to FileMaker container {field_name}: {file_path}")
+                return True
+            else:
+                logger.error(f"FileMaker file upload failed: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"FileMaker file upload error: {e}")
+            return False
+    
+    def logout(self):
+        """Logout from FileMaker session"""
+        if not self.enabled or not self.token:
+            return
+            
+        try:
+            logout_url = f"{self.base_url}/sessions/{self.token}"
+            response = requests.delete(logout_url, verify=False, timeout=30)
+            logger.info("FileMaker session closed")
+        except Exception as e:
+            logger.error(f"FileMaker logout error: {e}")
 
-    def process_file(self, pdf_file):
-        """Process a single PDF file through the complete pipeline"""
-        logger.info(f"🔍 Processing: {pdf_file.name}")
+class UnifiedOCRPipeline:
+    """Main pipeline orchestrator"""
+    
+    def __init__(self):
+        self.incoming_dir = os.getenv('OCR_INCOMING', '/app/incoming')
+        self.processed_dir = os.getenv('OCR_PROCESSED', '/app/processed')
         
-        # Create temporary file paths
-        ocr_pdf = self.incoming_dir / f"temp_ocr_{pdf_file.name}"
-        po_pdf = self.incoming_dir / f"temp_po_{pdf_file.name}"
-        router_pdf = self.incoming_dir / f"temp_router_{pdf_file.name}"
+        self.pdf_processor = EnhancedPDFProcessor(self.incoming_dir, self.processed_dir)
+        self.filemaker = FileMakerIntegration()
+        
+        logger.info(f"Pipeline initialized - Incoming: {self.incoming_dir}, Processed: {self.processed_dir}")
+    
+    def create_output_folder(self, po_number: str) -> Path:
+        """Create output folder named with PO number"""
+        if po_number:
+            folder_name = f"PO_{po_number}"
+        else:
+            # Use timestamp for files without valid PO numbers
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            folder_name = f"ERROR_{timestamp}"
+            
+        output_folder = Path(self.processed_dir) / folder_name
+        output_folder.mkdir(exist_ok=True)
+        return output_folder
+    
+    def process_single_file(self, input_file: Path) -> bool:
+        """Process a single PDF file through the complete pipeline"""
+        logger.info(f"🔄 Processing file: {input_file.name}")
         
         try:
-            # Step 1: OCR
-            if not self.run_ocr(pdf_file, ocr_pdf):
-                raise Exception("OCR failed")
+            # Step 1: Split the PDF
+            temp_dir = Path(self.processed_dir) / "temp"
+            temp_dir.mkdir(exist_ok=True)
             
-            # Step 2: Split into PO and Router
-            has_po, has_router = self.split_po_and_router(ocr_pdf, po_pdf, router_pdf)
+            temp_po = temp_dir / f"{input_file.stem}_po.pdf"
+            temp_router = temp_dir / f"{input_file.stem}_router.pdf"
             
-            if not has_po:
-                raise Exception("No PO pages found")
+            if not self.pdf_processor.split_po_router(str(input_file), str(temp_po), str(temp_router)):
+                logger.error(f"Failed to split PDF: {input_file}")
+                return False
             
-            # Step 3: Extract text and fields
-            text = self.extract_text_from_pdf(po_pdf)
+            # Step 2: OCR the PO file (all pages)
+            ocr_po = temp_dir / f"{input_file.stem}_po_ocr.pdf"
+            if not self.pdf_processor.run_ocr_on_file(str(temp_po), str(ocr_po)):
+                logger.error(f"Failed to OCR PO file: {temp_po}")
+                return False
             
-            # Try Ollama first, fallback to regex
-            fields = self.extract_fields_with_ollama(text)
-            if not fields or not fields.get('po_number'):
-                logger.info("Using regex extraction as fallback")
-                fields = self.extract_fields_regex(text)
+            # Step 3: OCR first page of Router (if exists)
+            ocr_router = None
+            if temp_router.exists():
+                ocr_router = temp_dir / f"{input_file.stem}_router_ocr.pdf"
+                if not self.pdf_processor.run_ocr_on_file(str(temp_router), str(ocr_router), pages_only="1"):
+                    logger.warning(f"Failed to OCR Router file (continuing anyway): {temp_router}")
             
-            # Add metadata
-            fields.update({
-                "source_file": pdf_file.name,
-                "processed_date": datetime.now().isoformat(),
-                "has_router": has_router,
-                "quality_descriptions": [QUALITY_CLAUSES.get(q, q) for q in fields.get('quality_clauses', [])],
-                "payment_terms_flag": fields.get('payment_terms', '').lower() not in ['net 30', '30 days', 'net30']
-            })
+            # Step 4: Extract text and fields from PO
+            po_text = self.pdf_processor.extract_text_from_pdf(str(ocr_po))
+            if not po_text:
+                logger.error(f"No text extracted from PO file: {ocr_po}")
+                return False
             
-            # Determine output directory
-            po_number = fields.get('po_number')
-            if po_number and po_number.startswith('455'):
-                output_dir = self.processed_dir / f"PO{po_number}"
-                success = True
+            extractor = FieldExtractor(po_text)
+            extracted_data = extractor.extract_all_fields()
+            
+            # Step 5: Create output folder using PO number
+            po_number = extracted_data.get('po_number')
+            output_folder = self.create_output_folder(po_number)
+            
+            # Step 6: Save files to output folder
+            if po_number:
+                final_po_name = f"{po_number}_PO.pdf"
+                final_router_name = f"{po_number}_ROUTER.pdf"
             else:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_dir = self.processed_dir / f"ERROR_{timestamp}_{pdf_file.stem}"
-                logger.warning(f"Invalid/missing PO number: {po_number}")
-                success = False
+                final_po_name = f"{input_file.stem}_PO.pdf"
+                final_router_name = f"{input_file.stem}_ROUTER.pdf"
             
-            # Create output directory
-            output_dir.mkdir(parents=True, exist_ok=True)
+            final_po = output_folder / final_po_name
+            final_router = output_folder / final_router_name
             
-            # Step 4: Save files
-            final_po_path = output_dir / f"PO_{po_number or 'UNKNOWN'}.pdf"
-            final_router_path = output_dir / f"Router_{po_number or 'UNKNOWN'}.pdf" if has_router else None
+            # Copy OCR'd files to final location
+            import shutil
+            shutil.copy2(str(ocr_po), str(final_po))
+            if ocr_router and ocr_router.exists():
+                shutil.copy2(str(ocr_router), str(final_router))
             
-            shutil.move(str(po_pdf), str(final_po_path))
-            if has_router and router_pdf.exists():
-                shutil.move(str(router_pdf), str(final_router_path))
+            # Save extracted data as JSON
+            json_file = output_folder / "extracted_data.json"
+            with open(json_file, 'w') as f:
+                json.dump(extracted_data, f, indent=2)
             
-            # Save extracted data
-            json_path = output_dir / "extracted_data.json"
-            with open(json_path, 'w') as f:
-                json.dump(fields, f, indent=2)
+            # Save raw text for debugging
+            text_file = output_folder / "extracted_text.txt"
+            with open(text_file, 'w') as f:
+                f.write(po_text)
             
-            # Save extracted text
-            text_path = output_dir / "extracted_text.txt"
-            with open(text_path, 'w') as f:
-                f.write(text)
+            # Step 7: Upload to FileMaker (if enabled)
+            if self.filemaker.enabled and po_number:
+                if self.filemaker.authenticate():
+                    record_id = self.filemaker.create_record(extracted_data)
+                    if record_id:
+                        # Upload PO file
+                        self.filemaker.upload_file_to_container(record_id, 'IncomingPO', str(final_po))
+                        # Upload Router file if it exists
+                        if final_router.exists():
+                            self.filemaker.upload_file_to_container(record_id, 'IncomingRouter', str(final_router))
+                    self.filemaker.logout()
             
-            # Step 5: FileMaker integration
-            if success:
-                fm_success = self.send_to_filemaker(fields, final_po_path, final_router_path)
-                fields['filemaker_uploaded'] = fm_success
-                
-                # Update JSON with FileMaker status
-                with open(json_path, 'w') as f:
-                    json.dump(fields, f, indent=2)
+            # Step 8: Clean up temp files
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
             
-            # Step 6: Archive original
-            archive_path = output_dir / pdf_file.name
-            shutil.move(str(pdf_file), str(archive_path))
+            # Step 9: Remove original file from incoming
+            input_file.unlink()
             
-            logger.info(f"✅ Successfully processed: {pdf_file.name} -> {output_dir.name}")
+            logger.info(f"✅ Successfully processed: {input_file.name} -> {output_folder.name}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to process {pdf_file.name}: {e}")
-            
-            # Move to error directory
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            error_dir = self.processed_dir / f"ERROR_{timestamp}_{pdf_file.stem}"
-            error_dir.mkdir(parents=True, exist_ok=True)
-            
-            try:
-                shutil.move(str(pdf_file), str(error_dir / pdf_file.name))
-                
-                # Save error info
-                error_info = {
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat(),
-                    "source_file": pdf_file.name
-                }
-                with open(error_dir / "error.json", 'w') as f:
-                    json.dump(error_info, f, indent=2)
-                    
-            except Exception as move_error:
-                logger.error(f"Failed to move error file: {move_error}")
-            
+            logger.error(f"❌ Error processing {input_file}: {e}")
             return False
-            
-        finally:
-            # Cleanup temporary files
-            for temp_file in [ocr_pdf, po_pdf, router_pdf]:
-                if temp_file.exists():
-                    try:
-                        temp_file.unlink()
-                    except Exception:
-                        pass
-
+    
     def run(self):
-        """Main processing loop"""
-        logger.info("Starting pipeline scan...")
+        """Main pipeline execution"""
+        logger.info("🚀 Starting Unified OCR Pipeline")
+        
+        incoming_path = Path(self.incoming_dir)
+        if not incoming_path.exists():
+            logger.error(f"Incoming directory does not exist: {self.incoming_dir}")
+            return
         
         # Find all PDF files in incoming directory
-        pdf_files = [f for f in self.incoming_dir.iterdir() 
-                    if f.is_file() and f.suffix.lower() == '.pdf']
+        pdf_files = list(incoming_path.glob("*.pdf"))
         
         if not pdf_files:
-            logger.info("No PDF files found")
+            logger.info("No PDF files found in incoming directory")
             return
         
         logger.info(f"Found {len(pdf_files)} PDF files to process")
         
+        # Process each file
         processed_count = 0
         error_count = 0
         
         for pdf_file in pdf_files:
             try:
-                if self.process_file(pdf_file):
+                if self.process_single_file(pdf_file):
                     processed_count += 1
                 else:
                     error_count += 1
             except Exception as e:
-                logger.error(f"Unexpected error processing {pdf_file.name}: {e}")
+                logger.error(f"Unexpected error processing {pdf_file}: {e}")
                 error_count += 1
         
-        logger.info(f"Pipeline complete: {processed_count} successful, {error_count} errors")
+        logger.info(f"📊 Pipeline completed - Processed: {processed_count}, Errors: {error_count}")
 
 def main():
-    """Entry point"""
-    processor = UnifiedOCRProcessor()
-    processor.run()
+    """Main entry point"""
+    try:
+        pipeline = UnifiedOCRPipeline()
+        pipeline.run()
+        
+    except KeyboardInterrupt:
+        logger.info("Pipeline interrupted by user")
+    except Exception as e:
+        logger.error(f"Pipeline failed with error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

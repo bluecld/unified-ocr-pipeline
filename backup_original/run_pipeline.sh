@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Enhanced Unified OCR Pipeline Runner Script
+# Unified OCR Pipeline Runner Script
 # This script runs the pipeline with proper logging and error handling
 
 set -e
@@ -13,7 +13,7 @@ export OLLAMA_HOST=${OLLAMA_HOST:-"http://ollama:11434"}
 export FM_ENABLED=${FM_ENABLED:-"true"}
 
 # Create log entry
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Enhanced OCR Pipeline"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Unified OCR Pipeline"
 echo "  - Incoming: $OCR_INCOMING"
 echo "  - Processed: $OCR_PROCESSED"
 echo "  - Log Level: $OCR_LOG_LEVEL"
@@ -46,18 +46,8 @@ if [ "$OLLAMA_HOST" != "" ]; then
     fi
 fi
 
-# Test FileMaker connection if enabled
-if [ "$FM_ENABLED" = "true" ] && [ "$FM_HOST" != "" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Testing FileMaker connection..."
-    if curl -s --connect-timeout 5 --insecure "https://$FM_HOST/fmi/data/v1" > /dev/null 2>&1; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - FileMaker connection successful"
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - WARNING: FileMaker not reachable, records will not be uploaded"
-    fi
-fi
-
 # Run the Python pipeline
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Executing enhanced pipeline..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Executing pipeline..."
 
 python /app/unified_ocr_pipeline.py
 
@@ -69,29 +59,18 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Pipeline failed with exit code $PIPELINE_EXIT_CODE"
 fi
 
-# Log final status with enhanced metrics
-PROCESSED_COUNT=$(find "$OCR_PROCESSED" -maxdepth 1 -name "PO_*" -type d | wc -l)
+# Log final status
+PROCESSED_COUNT=$(find "$OCR_PROCESSED" -maxdepth 1 -name "PO*" -type d | wc -l)
 ERROR_COUNT=$(find "$OCR_PROCESSED" -maxdepth 1 -name "ERROR_*" -type d | wc -l)
 REMAINING_COUNT=$(find "$OCR_INCOMING" -maxdepth 1 -name "*.pdf" -type f | wc -l)
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Processing Summary:"
-echo "  - Successfully processed: $PROCESSED_COUNT folders"
-echo "  - Error folders created: $ERROR_COUNT" 
-echo "  - Files remaining: $REMAINING_COUNT"
-
-# Check for recent successful processing
-if [ $PROCESSED_COUNT -gt 0 ]; then
-    LATEST_FOLDER=$(find "$OCR_PROCESSED" -maxdepth 1 -name "PO_*" -type d -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-    if [ -n "$LATEST_FOLDER" ]; then
-        echo "  - Latest processed: $(basename "$LATEST_FOLDER")"
-    fi
-fi
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Summary:"
+echo "  - Processed folders: $PROCESSED_COUNT"
+echo "  - Error folders: $ERROR_COUNT" 
+echo "  - Remaining files: $REMAINING_COUNT"
 
 # Clean up old log files (keep last 7 days)
 find /app/logs -name "*.log" -type f -mtime +7 -exec rm {} \; 2>/dev/null || true
 
-# Clean up old error folders (keep last 30 days)
-find "$OCR_PROCESSED" -maxdepth 1 -name "ERROR_*" -type d -mtime +30 -exec rm -rf {} \; 2>/dev/null || true
-
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Enhanced pipeline run complete"
-echo "========================================================"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Pipeline run complete"
+echo "----------------------------------------"
