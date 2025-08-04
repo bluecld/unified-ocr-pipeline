@@ -230,22 +230,49 @@ class EnhancedPDFProcessor:
                         return None
                 
                 # Look for "Page 1 of N" patterns with improved matching
-                # Handle variations like "Page 1of", "Page 1 of", "1 of 2", etc.
+                # Handle variations like "Page 1of", "Page 1 of", "1 of 2", multi-line splits, etc.
                 page_patterns = [
-                    r'page\s*1\s*of\s*(\d+)',           # "Page 1 of 3"
-                    r'page\s*1\s*o[fl]\s*(\d+)',        # "Page 1of 3" or "Page 1ol 3" (OCR errors)
-                    r'\b1\s+of\s+(\d+)',                # "1 of 3"
-                    r'\b1\s*\/\s*(\d+)',                # "1/3" or "1 / 3"
-                    r'page\s+1\s+\w+\s+(\d+)',          # "Page 1 [garbled] 3"
+                    r'page\s*1\s*of\s*(\d+)',                    # "Page 1 of 3"
+                    r'page\s*1\s*o[fl]\s*(\d+)',                 # "Page 1of 3" or "Page 1ol 3" (OCR errors)
+                    r'page\s*1\s*o[fl]?\s*\n?\s*(\d+)',          # "Page 1of\n2" (multi-line)
+                    r'page\s*1\s*o[fl]?\s*version\s*(\d+)',      # "Page 1of version 2"
+                    r'page\s*1\s*o[fl]?\s*[\w\s]*?(\d+)',        # "Page 1of [anything] 2"
+                    r'\b1\s+of\s+(\d+)',                         # "1 of 3"
+                    r'\b1\s*\/\s*(\d+)',                         # "1/3" or "1 / 3"
+                    r'page\s+1\s+\w+\s+(\d+)',                   # "Page 1 [garbled] 3"
                 ]
                 
                 match = None
                 matched_pattern = None
+                
+                # First try single-line patterns
                 for pattern in page_patterns:
-                    match = re.search(pattern, first_page_text, re.IGNORECASE)
+                    match = re.search(pattern, first_page_text, re.IGNORECASE | re.DOTALL)
                     if match:
                         matched_pattern = pattern
                         break
+                
+                # If no match, try looking for "Page 1of" and then find the next number
+                if not match:
+                    page_1of_match = re.search(r'page\s*1\s*o[fl]?', first_page_text, re.IGNORECASE)
+                    if page_1of_match:
+                        # Look for the next number after "Page 1of"
+                        remaining_text = first_page_text[page_1of_match.end():]
+                        next_number_match = re.search(r'(\d+)', remaining_text)
+                        if next_number_match:
+                            # Skip "version 0" - look for the actual page count
+                            if next_number_match.group(1) != '0':
+                                match = next_number_match
+                                matched_pattern = "Page 1of + next number"
+                                logger.info(f"Found 'Page 1of' followed by number: {next_number_match.group(1)}")
+                            else:
+                                # If first number is 0, look for the next one
+                                remaining_text2 = remaining_text[next_number_match.end():]
+                                next_number_match2 = re.search(r'(\d+)', remaining_text2)
+                                if next_number_match2:
+                                    match = next_number_match2
+                                    matched_pattern = "Page 1of + second number"
+                                    logger.info(f"Found 'Page 1of' followed by page count: {next_number_match2.group(1)}")
                 
                 if match:
                     total_po_pages = int(match.group(1))
