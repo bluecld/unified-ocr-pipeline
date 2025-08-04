@@ -122,22 +122,70 @@ class EnhancedPDFProcessor:
             r'process\s+sheet'
         ]
         
-    def find_router_start_page(self, pdf_path: str) -> Optional[int]:
+    def ocr_first_page_for_analysis(self, pdf_path: str, temp_dir: str) -> Optional[str]:
+        """
+        OCR only the first page to extract text for page count detection
+        Returns extracted text from first page or None if failed
+        """
+        try:
+            temp_first_page_pdf = os.path.join(temp_dir, "first_page_temp.pdf")
+            temp_first_page_ocr = os.path.join(temp_dir, "first_page_ocr_temp.pdf")
+            
+            # Extract just the first page
+            doc = fitz.open(pdf_path)
+            first_page_doc = fitz.open()
+            first_page_doc.insert_pdf(doc, from_page=0, to_page=0)
+            first_page_doc.save(temp_first_page_pdf)
+            first_page_doc.close()
+            doc.close()
+            
+            # OCR just the first page
+            if self.run_ocr_on_file(temp_first_page_pdf, temp_first_page_ocr):
+                # Extract text from OCR'd first page
+                text = self.extract_text_from_pdf(temp_first_page_ocr)
+                
+                # Clean up temp files
+                try:
+                    os.remove(temp_first_page_pdf)
+                    os.remove(temp_first_page_ocr)
+                except:
+                    pass
+                
+                logger.info("Successfully OCR'd first page for analysis")
+                return text
+            else:
+                logger.error("Failed to OCR first page")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error OCR'ing first page: {e}")
+            return None
+
+    def find_router_start_page(self, pdf_path: str, temp_dir: str = None) -> Optional[int]:
         """
         Find the page where Router section begins using text analysis
-        First checks for "Page 1 of N" indicator to determine PO length,
-        then falls back to keyword-based detection
+        For raw scanned files: OCR first page only to detect "Page 1 of N"
+        For text PDFs: Extract text directly
         Returns page number (0-indexed) or None if not found
         """
         try:
             doc = fitz.open(pdf_path)
+            first_page_text = ""
             
-            # First, check the first page for "Page 1 of N" indicator
+            # First, try to extract text directly (for already OCR'd PDFs)
             if len(doc) > 0:
                 first_page = doc[0]
                 first_page_text = first_page.get_text()
                 
-                # Look for "Page 1 of N" pattern in header/footer areas
+                # If no text found, this is likely a raw scanned file - OCR first page only
+                if not first_page_text.strip() and temp_dir:
+                    logger.info("No text found on first page - OCR'ing first page only for analysis")
+                    first_page_text = self.ocr_first_page_for_analysis(pdf_path, temp_dir)
+                    if not first_page_text:
+                        doc.close()
+                        return None
+                
+                # Look for "Page 1 of N" pattern in first page text
                 page_pattern = r'page\s+1\s+of\s+(\d+)'
                 match = re.search(page_pattern, first_page_text, re.IGNORECASE)
                 
@@ -161,9 +209,17 @@ class EnhancedPDFProcessor:
             # Fall back to keyword-based detection if no page indicator found
             logger.info("No 'Page 1 of N' indicator found, falling back to keyword detection")
             
+            # For keyword detection, we need to check each page
+            # If this is a raw scanned file, we'll need to OCR more pages
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 text = page.get_text().lower()
+                
+                # If no text and this is a scanned file, we'd need to OCR this page
+                # For now, skip keyword detection on scanned files to save time
+                if not text.strip() and temp_dir:
+                    logger.info("Skipping keyword detection on raw scanned file to save OCR time")
+                    break
                 
                 # Check if any router indicators are present
                 for pattern in self.router_indicators:
@@ -180,13 +236,13 @@ class EnhancedPDFProcessor:
             logger.error(f"Error analyzing PDF for router section: {e}")
             return None
     
-    def split_po_router(self, input_pdf: str, po_pdf: str, router_pdf: str) -> bool:
+    def split_po_router(self, input_pdf: str, po_pdf: str, router_pdf: str, temp_dir: str = None) -> bool:
         """
         Split PDF into PO and Router sections based on text content analysis
         Returns True if splitting was successful
         """
         try:
-            router_start_page = self.find_router_start_page(input_pdf)
+            router_start_page = self.find_router_start_page(input_pdf, temp_dir)
             
             doc = fitz.open(input_pdf)
             po_doc = fitz.open()
@@ -258,6 +314,57 @@ class EnhancedPDFProcessor:
         except Exception as e:
             logger.error(f"OCR error for {input_pdf}: {e}")
             return False
+
+    def selective_ocr_with_split_info(self, input_pdf: str, po_pdf: str, router_pdf: str, 
+                                    router_start_page: Optional[int], temp_dir: str) -> Tuple[str, Optional[str]]:
+        """
+        Perform selective OCR based on discovered split information
+        Returns (po_ocr_path, router_ocr_path) or (None, None) if failed
+        """
+        try:
+            po_ocr_path = os.path.join(temp_dir, f"{Path(input_pdf).stem}_po_ocr.pdf")
+            router_ocr_path = None
+            
+            # OCR the PO section (all PO pages)
+            if router_start_page is not None:
+                # We know exactly which pages are PO - OCR only those pages
+                po_page_range = f"1-{router_start_page}"
+                logger.info(f"OCR'ing PO section (pages {po_page_range}) with selective strategy")
+                
+                if self.run_ocr_on_file(input_pdf, po_ocr_path, pages_only=po_page_range):
+                    logger.info(f"Selective OCR of PO pages completed: {po_ocr_path}")
+                else:
+                    logger.error("Failed to OCR PO section with selective strategy")
+                    return None, None
+                
+                # OCR only first page of Router section
+                doc = fitz.open(input_pdf)
+                if router_start_page < len(doc):
+                    router_first_page = router_start_page + 1  # Convert to 1-based for ocrmypdf
+                    router_ocr_path = os.path.join(temp_dir, f"{Path(input_pdf).stem}_router_ocr.pdf")
+                    
+                    logger.info(f"OCR'ing Router first page (page {router_first_page}) with selective strategy")
+                    if self.run_ocr_on_file(input_pdf, router_ocr_path, pages_only=str(router_first_page)):
+                        logger.info(f"Selective OCR of Router first page completed: {router_ocr_path}")
+                    else:
+                        logger.warning("Failed to OCR Router first page - continuing without it")
+                        router_ocr_path = None
+                doc.close()
+                
+            else:
+                # No router section found - OCR entire document as PO
+                logger.info("OCR'ing entire document as PO (no router section detected)")
+                if self.run_ocr_on_file(input_pdf, po_ocr_path):
+                    logger.info(f"Full document OCR completed: {po_ocr_path}")
+                else:
+                    logger.error("Failed to OCR entire document")
+                    return None, None
+            
+            return po_ocr_path, router_ocr_path
+            
+        except Exception as e:
+            logger.error(f"Error in selective OCR strategy: {e}")
+            return None, None
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract all text from OCR'd PDF"""
@@ -667,34 +774,29 @@ class UnifiedOCRPipeline:
         logger.info(f"🔄 Processing file: {input_file.name}")
         
         try:
-            # Step 1: Split the PDF
+            # Step 1: Analyze PDF and determine split strategy
             temp_dir = Path(self.processed_dir) / "temp"
             temp_dir.mkdir(exist_ok=True)
             
-            temp_po = temp_dir / f"{input_file.stem}_po.pdf"
-            temp_router = temp_dir / f"{input_file.stem}_router.pdf"
+            logger.info("🔍 Analyzing PDF structure for optimal OCR strategy...")
             
-            if not self.pdf_processor.split_po_router(str(input_file), str(temp_po), str(temp_router)):
-                logger.error(f"Failed to split PDF: {input_file}")
+            # Get split information (this now includes smart first-page OCR for raw scans)
+            router_start_page = self.pdf_processor.find_router_start_page(str(input_file), str(temp_dir))
+            
+            # Step 2: Use selective OCR strategy based on discovered split point
+            logger.info("⚡ Applying selective OCR strategy...")
+            ocr_po_path, ocr_router_path = self.pdf_processor.selective_ocr_with_split_info(
+                str(input_file), "", "", router_start_page, str(temp_dir)
+            )
+            
+            if not ocr_po_path:
+                logger.error(f"Failed to OCR PDF with selective strategy: {input_file}")
                 return False
             
-            # Step 2: OCR the PO file (all pages)
-            ocr_po = temp_dir / f"{input_file.stem}_po_ocr.pdf"
-            if not self.pdf_processor.run_ocr_on_file(str(temp_po), str(ocr_po)):
-                logger.error(f"Failed to OCR PO file: {temp_po}")
-                return False
-            
-            # Step 3: OCR first page of Router (if exists)
-            ocr_router = None
-            if temp_router.exists():
-                ocr_router = temp_dir / f"{input_file.stem}_router_ocr.pdf"
-                if not self.pdf_processor.run_ocr_on_file(str(temp_router), str(ocr_router), pages_only="1"):
-                    logger.warning(f"Failed to OCR Router file (continuing anyway): {temp_router}")
-            
-            # Step 4: Extract text and fields from PO
-            po_text = self.pdf_processor.extract_text_from_pdf(str(ocr_po))
+            # Step 3: Extract text and fields from OCR'd PO section
+            po_text = self.pdf_processor.extract_text_from_pdf(ocr_po_path)
             if not po_text:
-                logger.error(f"No text extracted from PO file: {ocr_po}")
+                logger.error(f"No text extracted from PO file: {ocr_po_path}")
                 return False
             
             extractor = FieldExtractor(po_text)
@@ -717,9 +819,9 @@ class UnifiedOCRPipeline:
             
             # Copy OCR'd files to final location
             import shutil
-            shutil.copy2(str(ocr_po), str(final_po))
-            if ocr_router and ocr_router.exists():
-                shutil.copy2(str(ocr_router), str(final_router))
+            shutil.copy2(ocr_po_path, str(final_po))
+            if ocr_router_path and Path(ocr_router_path).exists():
+                shutil.copy2(ocr_router_path, str(final_router))
             
             # Save extracted data as JSON
             json_file = output_folder / "extracted_data.json"
