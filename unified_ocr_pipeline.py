@@ -122,9 +122,49 @@ class EnhancedPDFProcessor:
             r'process\s+sheet'
         ]
         
+    def run_high_quality_ocr(self, input_pdf: str, output_pdf: str, pages_only: Optional[str] = None) -> bool:
+        """
+        Run high-quality OCR optimized for page number detection
+        Uses enhanced settings for better text recognition
+        """
+        try:
+            cmd = [
+                "ocrmypdf",
+                "--force-ocr",
+                "--rotate-pages",
+                "--deskew",  # Fix skewed pages
+                "--clean",   # Clean up artifacts
+                "--tesseract-timeout", "60",  # More time for quality
+                "--optimize", "1",
+                "--pdfa-image-compression", "lossless",  # Better quality
+                "--tesseract-config", "tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,()of"  # Focus on page numbers
+            ]
+            
+            # Add page selection if specified
+            if pages_only:
+                cmd.extend(["--pages", pages_only])
+                
+            cmd.extend([input_pdf, output_pdf])
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            
+            if result.returncode == 0:
+                logger.info(f"High-quality OCR completed successfully: {output_pdf}")
+                return True
+            else:
+                logger.error(f"High-quality OCR failed for {input_pdf}: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"High-quality OCR timeout for {input_pdf}")
+            return False
+        except Exception as e:
+            logger.error(f"High-quality OCR error for {input_pdf}: {e}")
+            return False
+
     def ocr_first_page_for_analysis(self, pdf_path: str, temp_dir: str) -> Optional[str]:
         """
-        OCR only the first page to extract text for page count detection
+        OCR only the first page with high quality settings for page count detection
         Returns extracted text from first page or None if failed
         """
         try:
@@ -139,10 +179,14 @@ class EnhancedPDFProcessor:
             first_page_doc.close()
             doc.close()
             
-            # OCR just the first page
-            if self.run_ocr_on_file(temp_first_page_pdf, temp_first_page_ocr):
+            # Use high-quality OCR for first page analysis
+            logger.info("Using high-quality OCR settings for page count detection...")
+            if self.run_high_quality_ocr(temp_first_page_pdf, temp_first_page_ocr):
                 # Extract text from OCR'd first page
                 text = self.extract_text_from_pdf(temp_first_page_ocr)
+                
+                # Debug: log the extracted text for analysis
+                logger.info(f"First page OCR text sample: {repr(text[:200])}")
                 
                 # Clean up temp files
                 try:
@@ -151,10 +195,10 @@ class EnhancedPDFProcessor:
                 except:
                     pass
                 
-                logger.info("Successfully OCR'd first page for analysis")
+                logger.info("Successfully OCR'd first page with high-quality settings")
                 return text
             else:
-                logger.error("Failed to OCR first page")
+                logger.error("Failed to OCR first page with high-quality settings")
                 return None
                 
         except Exception as e:
@@ -185,13 +229,27 @@ class EnhancedPDFProcessor:
                         doc.close()
                         return None
                 
-                # Look for "Page 1 of N" pattern in first page text
-                page_pattern = r'page\s+1\s+of\s+(\d+)'
-                match = re.search(page_pattern, first_page_text, re.IGNORECASE)
+                # Look for "Page 1 of N" patterns with improved matching
+                # Handle variations like "Page 1of", "Page 1 of", "1 of 2", etc.
+                page_patterns = [
+                    r'page\s*1\s*of\s*(\d+)',           # "Page 1 of 3"
+                    r'page\s*1\s*o[fl]\s*(\d+)',        # "Page 1of 3" or "Page 1ol 3" (OCR errors)
+                    r'\b1\s+of\s+(\d+)',                # "1 of 3"
+                    r'\b1\s*\/\s*(\d+)',                # "1/3" or "1 / 3"
+                    r'page\s+1\s+\w+\s+(\d+)',          # "Page 1 [garbled] 3"
+                ]
+                
+                match = None
+                matched_pattern = None
+                for pattern in page_patterns:
+                    match = re.search(pattern, first_page_text, re.IGNORECASE)
+                    if match:
+                        matched_pattern = pattern
+                        break
                 
                 if match:
                     total_po_pages = int(match.group(1))
-                    logger.info(f"Found 'Page 1 of {total_po_pages}' indicator - PO section is {total_po_pages} pages")
+                    logger.info(f"Found page count indicator using pattern '{matched_pattern}' - PO section is {total_po_pages} pages")
                     
                     # If the document has more pages than the PO section, 
                     # the router starts after the PO pages
