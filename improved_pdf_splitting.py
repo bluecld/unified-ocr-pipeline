@@ -9,6 +9,7 @@ import re
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 import logging
+from ocr_first_page_utils import extract_text_ocr_page1
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,13 @@ class ImprovedPDFSplitter:
             'table_structure_change'
         ]
     
-    def extract_text_with_positions(self, page) -> List[Dict]:
+    
+    def fallback_ocr_page1(self, pdf_path: str) -> str:
+        """Fallback to OCR-based text extraction for page 1 if layout-based detection fails."""
+        return extract_text_ocr_page1(pdf_path)
+
+
+def extract_text_with_positions(self, page) -> List[Dict]:
         """Extract text with position and font information"""
         text_dict = page.get_text("dict")
         text_blocks = []
@@ -97,6 +104,9 @@ class ImprovedPDFSplitter:
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 text = page.get_text().lower()
+                if not text.strip():
+                    logger.warning('Primary text extraction failed on page 1, using OCR fallback')
+                    text = self.fallback_ocr_page1(pdf_path)
                 
                 if not text.strip():
                     continue
