@@ -302,12 +302,22 @@ def extract_text_with_positions(self, page) -> List[Dict]:
     def find_optimal_split_point(self, pdf_path: str) -> Tuple[Optional[int], float, str]:
         """
         Combine all detection methods to find the best split point
+        # More tolerant OCR pattern for 'Page 1 of N'
+        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+            logger.info('Detected valid page numbering via OCR')
         First checks for "Page 1 of N" indicator to determine PO length,
         then falls back to multi-method detection
         Returns (page_number, confidence, explanation)
         """
         logger.info("Running comprehensive PDF split point detection...")
         
+        # More tolerant OCR pattern for 'Page 1 of N'
+        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+            logger.info('Detected valid page numbering via OCR')
         # First, check for "Page 1 of N" indicator on the first page
         try:
             doc = fitz.open(pdf_path)
@@ -316,18 +326,33 @@ def extract_text_with_positions(self, page) -> List[Dict]:
                 first_page = doc[0]
                 first_page_text = first_page.get_text()
                 
+                # More tolerant OCR pattern for 'Page 1 of N'
+                if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                    logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                    return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                    logger.info('Detected valid page numbering via OCR')
                 # Look for "Page 1 of N" pattern
                 page_pattern = r'page\s+1\s+of\s+(\d+)'
                 match = re.search(page_pattern, first_page_text, re.IGNORECASE)
                 
                 if match:
                     total_po_pages = int(match.group(1))
+                    # More tolerant OCR pattern for 'Page 1 of N'
+                    if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                        logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                        return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                        logger.info('Detected valid page numbering via OCR')
                     logger.info(f"Found 'Page 1 of {total_po_pages}' indicator - PO section is {total_po_pages} pages")
                     
                     # If the document has more pages than the PO section,
                     # the router starts after the PO pages
                     if len(doc) > total_po_pages:
                         router_start = total_po_pages  # 0-indexed
+                        # More tolerant OCR pattern for 'Page 1 of N'
+                        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                            logger.info('Detected valid page numbering via OCR')
                         explanation = f"Page {router_start + 1} based on 'Page 1 of {total_po_pages}' indicator (confidence: 1.0)"
                         logger.info(f"Router section starts at {explanation}")
                         doc.close()
@@ -340,7 +365,11 @@ def extract_text_with_positions(self, page) -> List[Dict]:
                         return None, 1.0, explanation
             
             doc.close()
-            logger.info("No 'Page 1 of N' indicator found, falling back to multi-method detection")
+            # More tolerant OCR pattern for 'Page 1 of N'
+            if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                logger.info('Detected valid page numbering via OCR')
             
         except Exception as e:
             logger.error(f"Error checking for page indicator: {e}")
@@ -410,7 +439,6 @@ def extract_text_with_positions(self, page) -> List[Dict]:
                 po_doc.close()
                 doc.close()
                 
-                return True, f"No reliable router section found (confidence: {confidence:.2f}). Saved entire document as PO."
             
             # Split the document
             po_doc = fitz.open()
@@ -432,7 +460,6 @@ def extract_text_with_positions(self, page) -> List[Dict]:
             router_doc.close()
             doc.close()
             
-            return True, f"Successfully split at page {split_point + 1}. {explanation}"
             
         except Exception as e:
             logger.error(f"Enhanced PDF splitting failed: {e}")
