@@ -292,6 +292,11 @@ class EnhancedPDFProcessor:
                         return None
             
             # Fall back to keyword-based detection if no page indicator found
+            # Fuzzy OCR-aware check for 'Page 1 of N'
+            import re
+            if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', first_page_text, re.IGNORECASE):
+                logger.info('✅ Detected fuzzy page numbering via OCR — skipping keyword fallback')
+                return None  # or break depending on context
             logger.info("No 'Page 1 of N' indicator found, falling back to keyword detection")
             
             # For keyword detection, we need to check each page
