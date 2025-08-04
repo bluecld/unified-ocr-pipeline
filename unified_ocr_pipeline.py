@@ -302,6 +302,12 @@ class EnhancedPDFProcessor:
             # For keyword detection, we need to check each page
             # If this is a raw scanned file, we'll need to OCR more pages
             for page_num in range(len(doc)):
+                # Fuzzy OCR-aware check on first page only
+                if page_num == 0:
+                    import re
+                    if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                        logger.info('✅ Detected fuzzy page numbering via OCR — skipping keyword fallback')
+                        return None
                 page = doc[page_num]
                 text = page.get_text().lower()
                 
