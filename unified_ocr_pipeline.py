@@ -247,14 +247,14 @@ class EnhancedPDFProcessor:
                 
                 # First try single-line patterns
                 for pattern in page_patterns:
-                    match = re.search(pattern, first_page_text, re.IGNORECASE | re.DOTALL)
+                    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
                     if match:
                         matched_pattern = pattern
                         break
                 
                 # If no match, try looking for "Page 1of" and then find the next number
                 if not match:
-                    page_1of_match = re.search(r'page\s*1\s*o[fl]?', first_page_text, re.IGNORECASE)
+                    page_1of_match = re.search(r'page\s*1\s*o[fl]?', text, re.IGNORECASE)
                     if page_1of_match:
                         # Look for the next number after "Page 1of"
                         remaining_text = first_page_text[page_1of_match.end():]
@@ -294,7 +294,7 @@ class EnhancedPDFProcessor:
             # Fall back to keyword-based detection if no page indicator found
             # Fuzzy OCR-aware check for 'Page 1 of N'
             import re
-            if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', first_page_text, re.IGNORECASE):
+            if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
                 logger.info('✅ Detected fuzzy page numbering via OCR — skipping keyword fallback')
                 return None  # or break depending on context
             logger.info("No 'Page 1 of N' indicator found, falling back to keyword detection")
