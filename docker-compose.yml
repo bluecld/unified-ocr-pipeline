@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Optional Ollama service for AI-enhanced extraction
   ollama:
