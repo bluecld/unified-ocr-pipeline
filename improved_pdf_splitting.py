@@ -59,7 +59,7 @@ class ImprovedPDFSplitter:
             r'payment\s+terms',
             r'delivery\s+date',
             r'quantity\s+ordered'
-        }
+        ]
         
         # Layout-based indicators
         self.layout_changes = [
@@ -292,10 +292,50 @@ class ImprovedPDFSplitter:
     def find_optimal_split_point(self, pdf_path: str) -> Tuple[Optional[int], float, str]:
         """
         Combine all detection methods to find the best split point
+        First checks for "Page 1 of N" indicator to determine PO length,
+        then falls back to multi-method detection
         Returns (page_number, confidence, explanation)
         """
         logger.info("Running comprehensive PDF split point detection...")
         
+        # First, check for "Page 1 of N" indicator on the first page
+        try:
+            doc = fitz.open(pdf_path)
+            
+            if len(doc) > 0:
+                first_page = doc[0]
+                first_page_text = first_page.get_text()
+                
+                # Look for "Page 1 of N" pattern
+                page_pattern = r'page\s+1\s+of\s+(\d+)'
+                match = re.search(page_pattern, first_page_text, re.IGNORECASE)
+                
+                if match:
+                    total_po_pages = int(match.group(1))
+                    logger.info(f"Found 'Page 1 of {total_po_pages}' indicator - PO section is {total_po_pages} pages")
+                    
+                    # If the document has more pages than the PO section,
+                    # the router starts after the PO pages
+                    if len(doc) > total_po_pages:
+                        router_start = total_po_pages  # 0-indexed
+                        explanation = f"Page {router_start + 1} based on 'Page 1 of {total_po_pages}' indicator (confidence: 1.0)"
+                        logger.info(f"Router section starts at {explanation}")
+                        doc.close()
+                        return router_start, 1.0, explanation
+                    else:
+                        # Document only contains PO pages
+                        explanation = f"Document contains only PO pages ({total_po_pages} pages, no router section)"
+                        logger.info(explanation)
+                        doc.close()  
+                        return None, 1.0, explanation
+            
+            doc.close()
+            logger.info("No 'Page 1 of N' indicator found, falling back to multi-method detection")
+            
+        except Exception as e:
+            logger.error(f"Error checking for page indicator: {e}")
+        
+        # Fall back to original multi-method detection
         # Run all detection methods
         text_results = self.detect_by_text_patterns(pdf_path)
         layout_results = self.detect_by_layout_analysis(pdf_path) 

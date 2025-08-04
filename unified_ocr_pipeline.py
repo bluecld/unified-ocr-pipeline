@@ -125,10 +125,41 @@ class EnhancedPDFProcessor:
     def find_router_start_page(self, pdf_path: str) -> Optional[int]:
         """
         Find the page where Router section begins using text analysis
+        First checks for "Page 1 of N" indicator to determine PO length,
+        then falls back to keyword-based detection
         Returns page number (0-indexed) or None if not found
         """
         try:
             doc = fitz.open(pdf_path)
+            
+            # First, check the first page for "Page 1 of N" indicator
+            if len(doc) > 0:
+                first_page = doc[0]
+                first_page_text = first_page.get_text()
+                
+                # Look for "Page 1 of N" pattern in header/footer areas
+                page_pattern = r'page\s+1\s+of\s+(\d+)'
+                match = re.search(page_pattern, first_page_text, re.IGNORECASE)
+                
+                if match:
+                    total_po_pages = int(match.group(1))
+                    logger.info(f"Found 'Page 1 of {total_po_pages}' indicator - PO section is {total_po_pages} pages")
+                    
+                    # If the document has more pages than the PO section, 
+                    # the router starts after the PO pages
+                    if len(doc) > total_po_pages:
+                        router_start = total_po_pages  # 0-indexed
+                        logger.info(f"Router section starts at page {router_start + 1} based on page count")
+                        doc.close()
+                        return router_start
+                    else:
+                        # Document only contains PO pages
+                        logger.info("Document contains only PO pages (no router section)")
+                        doc.close()
+                        return None
+            
+            # Fall back to keyword-based detection if no page indicator found
+            logger.info("No 'Page 1 of N' indicator found, falling back to keyword detection")
             
             for page_num in range(len(doc)):
                 page = doc[page_num]
