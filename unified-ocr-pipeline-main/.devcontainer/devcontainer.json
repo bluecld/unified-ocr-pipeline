@@ -1,0 +1,19 @@
+{
+  "name": "Unified OCR Dev Container",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile.unified"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {}
+  },
+  "mounts": [
+    "source=//bluecloud2/Main/scripts/unified_ocr_pipeline,target=/workspaces/unified_ocr_pipeline,type=bind,consistency=cached"
+  ],
+  "workspaceFolder": "/workspaces/unified_ocr_pipeline",
+  "settings": {
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+  "postCreateCommand": "ls -la",
+  "remoteUser": "root"
+}
