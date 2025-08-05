@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""
+Improved PDF Splitting Strategy for PO/Router Detection
+Uses multiple detection methods with fallback strategies
+"""
+
+import fitz  # PyMuPDF
+import re
+from typing import Optional, Tuple, List, Dict
+from dataclasses import dataclass
+import logging
+from ocr_first_page_utils import extract_text_ocr_page1
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class DetectionResult:
+    page_num: int
+    confidence: float
+    method: str
+    evidence: str
+
+class ImprovedPDFSplitter:
+        """Enhanced PDF splitter with multiple detection strategies"""
+    
+        def __init__(self):
+            # Enhanced router detection patterns
+            self.router_patterns = {
+                'strong': [
+                    r'routing\s+sheet',
+                    r'manufacturing\s+routing',
+                    r'work\s+order\s+routing',
+                    r'operation\s+sheet',
+                    r'process\s+routing'
+                ],
+                'medium': [
+                    r'router',
+                    r'routing',
+                    r'operation\s+sequence',
+                    r'work\s+instructions',
+                    r'process\s+sheet',
+                    r'job\s+routing'
+                ],
+                'weak': [
+                    r'op\s+\d+',
+                    r'operation\s+\d+',
+                    r'setup\s+time',
+                    r'cycle\s+time',
+                    r'machine\s+center'
+                ]
+            }
+        
+            # PO-specific patterns (what should be in PO section)
+            self.po_patterns = [
+                r'purchase\s+order',
+                r'po\s+number',
+                r'vendor',
+                r'ship\s+to',
+                r'bill\s+to',
+                r'payment\s+terms',
+                r'delivery\s+date',
+                r'quantity\s+ordered'
+            ]
+        
+            # Layout-based indicators
+            self.layout_changes = [
+                'significant_font_change',
+                'page_orientation_change', 
+                'margin_change',
+                'table_structure_change'
+            ]
+    
+    
+        def fallback_ocr_page1(self, pdf_path: str) -> str:
+            """Fallback to OCR-based text extraction for page 1 if layout-based detection fails."""
+            return extract_text_ocr_page1(pdf_path)
+
+
+def extract_text_with_positions(self, page) -> List[Dict]:
+        """Extract text with position and font information"""
+        text_dict = page.get_text("dict")
+        text_blocks = []
+        
+        for block in text_dict["blocks"]:
+            if "lines" in block:
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text_blocks.append({
+                            'text': span['text'],
+                            'bbox': span['bbox'],
+                            'font': span['font'],
+                            'size': span['size'],
+                            'flags': span['flags']
+                        })
+        return text_blocks
+    
+    def detect_by_text_patterns(self, pdf_path: str) -> List[DetectionResult]:
+        """Method 1: Enhanced text pattern detection"""
+        results = []
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text().lower()
+                if not text.strip():
+                    logger.warning('Primary text extraction failed on page 1, using OCR fallback')
+                    text = self.fallback_ocr_page1(pdf_path)
+                
+                if not text.strip():
+                    continue
+                
+                confidence = 0.0
+                evidence_parts = []
+                
+                # Check for strong indicators
+                for pattern in self.router_patterns['strong']:
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    if matches:
+                        confidence += 0.4
+                        evidence_parts.append(f"strong:{pattern}")
+                
+                # Check for medium indicators  
+                for pattern in self.router_patterns['medium']:
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    if matches:
+                        confidence += 0.2
+                        evidence_parts.append(f"medium:{pattern}")
+                
+                # Check for weak indicators
+                for pattern in self.router_patterns['weak']:
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    if matches:
+                        confidence += 0.1
+                        evidence_parts.append(f"weak:{pattern}")
+                
+                # Penalty if strong PO indicators are still present
+                po_indicators = sum(1 for pattern in self.po_patterns 
+                                 if re.search(pattern, text, re.IGNORECASE))
+                if po_indicators > 2:
+                    confidence -= 0.3
+                    evidence_parts.append(f"po_penalty:{po_indicators}")
+                
+                if confidence > 0.3:  # Threshold for consideration
+                    results.append(DetectionResult(
+                        page_num=page_num,
+                        confidence=confidence,
+                        method="text_patterns",
+                        evidence=" | ".join(evidence_parts)
+                    ))
+            
+            doc.close()
+            
+        except Exception as e:
+            logger.error(f"Text pattern detection failed: {e}")
+        
+        return results
+    
+    def detect_by_layout_analysis(self, pdf_path: str) -> List[DetectionResult]:
+        """Method 2: Layout and structure analysis"""
+        results = []
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            prev_page_info = None
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                # Get page layout info
+                page_info = {
+                    'width': page.rect.width,
+                    'height': page.rect.height,
+                    'orientation': 'landscape' if page.rect.width > page.rect.height else 'portrait'
+                }
+                
+                # Get text blocks with positioning
+                text_blocks = self.extract_text_with_positions(page)
+                
+                if text_blocks:
+                    fonts = [block['font'] for block in text_blocks]
+                    sizes = [block['size'] for block in text_blocks]
+                    
+                    page_info['dominant_font'] = max(set(fonts), key=fonts.count) if fonts else None
+                    page_info['avg_font_size'] = sum(sizes) / len(sizes) if sizes else 0
+                    page_info['text_blocks'] = len(text_blocks)
+                
+                confidence = 0.0
+                evidence_parts = []
+                
+                if prev_page_info:
+                    # Check for significant layout changes
+                    if page_info['orientation'] != prev_page_info['orientation']:
+                        confidence += 0.5
+                        evidence_parts.append("orientation_change")
+                    
+                    if abs(page_info['avg_font_size'] - prev_page_info['avg_font_size']) > 2:
+                        confidence += 0.3
+                        evidence_parts.append("font_size_change")
+                    
+                    if page_info['dominant_font'] != prev_page_info['dominant_font']:
+                        confidence += 0.2
+                        evidence_parts.append("font_change")
+                    
+                    # Significant reduction in text density might indicate router section
+                    text_density_change = (page_info['text_blocks'] - prev_page_info['text_blocks']) / max(prev_page_info['text_blocks'], 1)
+                    if text_density_change < -0.5:
+                        confidence += 0.3
+                        evidence_parts.append(f"text_density_drop:{text_density_change:.2f}")
+                
+                if confidence > 0.4:
+                    results.append(DetectionResult(
+                        page_num=page_num,
+                        confidence=confidence,
+                        method="layout_analysis",
+                        evidence=" | ".join(evidence_parts)
+                    ))
+                
+                prev_page_info = page_info
+            
+            doc.close()
+            
+        except Exception as e:
+            logger.error(f"Layout analysis failed: {e}")
+        
+        return results
+    
+    def detect_by_content_transition(self, pdf_path: str) -> List[DetectionResult]:
+        """Method 3: Content transition analysis"""
+        results = []
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            page_contents = []
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                # Extract key content indicators
+                content_score = {
+                    'po_content': 0,
+                    'router_content': 0,
+                    'numeric_ops': len(re.findall(r'op\s*\d+|operation\s+\d+', text, re.IGNORECASE)),
+                    'time_references': len(re.findall(r'setup|cycle|run\s+time', text, re.IGNORECASE)),
+                    'machine_references': len(re.findall(r'machine|center|station', text, re.IGNORECASE))
+                }
+                
+                # Score PO content
+                for pattern in self.po_patterns:
+                    content_score['po_content'] += len(re.findall(pattern, text, re.IGNORECASE))
+                
+                # Score router content
+                for strength in self.router_patterns:
+                    for pattern in self.router_patterns[strength]:
+                        weight = {'strong': 3, 'medium': 2, 'weak': 1}[strength]
+                        content_score['router_content'] += len(re.findall(pattern, text, re.IGNORECASE)) * weight
+                
+                page_contents.append(content_score)
+            
+            # Analyze transitions
+            for i in range(1, len(page_contents)):
+                prev_content = page_contents[i-1]
+                curr_content = page_contents[i]
+                
+                # Look for significant shift from PO to router content
+                po_drop = prev_content['po_content'] - curr_content['po_content']
+                router_rise = curr_content['router_content'] - prev_content['router_content']
+                
+                confidence = 0.0
+                evidence_parts = []
+                
+                if po_drop > 2 and router_rise > 2:
+                    confidence += 0.6
+                    evidence_parts.append(f"content_transition:po_drop={po_drop},router_rise={router_rise}")
+                
+                if curr_content['numeric_ops'] > prev_content['numeric_ops'] + 2:
+                    confidence += 0.3
+                    evidence_parts.append(f"operations_increase:{curr_content['numeric_ops']}")
+                
+                if curr_content['time_references'] > 0 and prev_content['time_references'] == 0:
+                    confidence += 0.2
+                    evidence_parts.append("time_refs_appear")
+                
+                if confidence > 0.5:
+                    results.append(DetectionResult(
+                        page_num=i,
+                        confidence=confidence,
+                        method="content_transition",
+                        evidence=" | ".join(evidence_parts)
+                    ))
+            
+            doc.close()
+            
+        except Exception as e:
+            logger.error(f"Content transition analysis failed: {e}")
+        
+        return results
+    
+    def find_optimal_split_point(self, pdf_path: str) -> Tuple[Optional[int], float, str]:
+        """
+        Combine all detection methods to find the best split point
+        # More tolerant OCR pattern for 'Page 1 of N'
+        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+            logger.info('Detected valid page numbering via OCR')
+        First checks for "Page 1 of N" indicator to determine PO length,
+        then falls back to multi-method detection
+        Returns (page_number, confidence, explanation)
+        """
+        logger.info("Running comprehensive PDF split point detection...")
+        
+        # More tolerant OCR pattern for 'Page 1 of N'
+        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+            logger.info('Detected valid page numbering via OCR')
+        # First, check for "Page 1 of N" indicator on the first page
+        try:
+            doc = fitz.open(pdf_path)
+            
+            if len(doc) > 0:
+                first_page = doc[0]
+                first_page_text = first_page.get_text()
+                
+                # More tolerant OCR pattern for 'Page 1 of N'
+                if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                    logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                    return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                    logger.info('Detected valid page numbering via OCR')
+                # Look for "Page 1 of N" pattern
+                page_pattern = r'page\s+1\s+of\s+(\d+)'
+                match = re.search(page_pattern, first_page_text, re.IGNORECASE)
+                
+                if match:
+                    total_po_pages = int(match.group(1))
+                    # More tolerant OCR pattern for 'Page 1 of N'
+                    if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                        logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                        return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                        logger.info('Detected valid page numbering via OCR')
+                    logger.info(f"Found 'Page 1 of {total_po_pages}' indicator - PO section is {total_po_pages} pages")
+                    
+                    # If the document has more pages than the PO section,
+                    # the router starts after the PO pages
+                    if len(doc) > total_po_pages:
+                        router_start = total_po_pages  # 0-indexed
+                        # More tolerant OCR pattern for 'Page 1 of N'
+                        if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                            logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                            return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                            logger.info('Detected valid page numbering via OCR')
+                        explanation = f"Page {router_start + 1} based on 'Page 1 of {total_po_pages}' indicator (confidence: 1.0)"
+                        logger.info(f"Router section starts at {explanation}")
+                        doc.close()
+                        return router_start, 1.0, explanation
+                    else:
+                        # Document only contains PO pages
+                        explanation = f"Document contains only PO pages ({total_po_pages} pages, no router section)"
+                        logger.info(explanation)
+                        doc.close()  
+                        return None, 1.0, explanation
+            
+            doc.close()
+            # More tolerant OCR pattern for 'Page 1 of N'
+            if re.search(r'page\s*[\dIto|l]{1,2}\s*of\s*\d+', text, re.IGNORECASE):
+                logger.info('✅ Page numbering detected — assuming PO/Router structure is valid')
+                return DetectionResult(page_num=0, confidence=0.95, method='ocr_page_label', evidence='page numbering header')
+                logger.info('Detected valid page numbering via OCR')
+            
+        except Exception as e:
+            logger.error(f"Error checking for page indicator: {e}")
+        
+        # Fall back to original multi-method detection
+        # Run all detection methods
+        text_results = self.detect_by_text_patterns(pdf_path)
+        layout_results = self.detect_by_layout_analysis(pdf_path) 
+        content_results = self.detect_by_content_transition(pdf_path)
+        
+        all_results = text_results + layout_results + content_results
+        
+        if not all_results:
+            logger.warning("No split points detected by any method")
+            return None, 0.0, "No router section detected"
+        
+        # Group results by page number and calculate combined confidence
+        page_scores = {}
+        for result in all_results:
+            page_num = result.page_num
+            if page_num not in page_scores:
+                page_scores[page_num] = {
+                    'total_confidence': 0.0,
+                    'methods': [],
+                    'evidence': []
+                }
+            
+            page_scores[page_num]['total_confidence'] += result.confidence
+            page_scores[page_num]['methods'].append(result.method)
+            page_scores[page_num]['evidence'].append(f"{result.method}: {result.evidence}")
+        
+        # Find the best candidate
+        best_page = None
+        best_confidence = 0.0
+        best_explanation = ""
+        
+        for page_num, score_info in page_scores.items():
+            # Bonus for multiple methods agreeing
+            method_bonus = len(set(score_info['methods'])) * 0.1
+            final_confidence = score_info['total_confidence'] + method_bonus
+            
+            if final_confidence > best_confidence:
+                best_confidence = final_confidence
+                best_page = page_num
+                best_explanation = f"Page {page_num + 1} (confidence: {final_confidence:.2f}): " + \
+                                 " | ".join(score_info['evidence'])
+        
+        logger.info(f"Best split point: {best_explanation}")
+        return best_page, best_confidence, best_explanation
+    
+    def split_pdf_enhanced(self, input_pdf: str, po_pdf: str, router_pdf: str, 
+                          min_confidence: float = 0.7) -> Tuple[bool, str]:
+        """
+        Enhanced PDF splitting with comprehensive detection
+        Returns (success, explanation)
+        """
+        try:
+            split_point, confidence, explanation = self.find_optimal_split_point(input_pdf)
+            
+            doc = fitz.open(input_pdf)
+            
+            if split_point is None or confidence < min_confidence:
+                # Treat entire document as PO
+                po_doc = fitz.open()
+                po_doc.insert_pdf(doc)
+                po_doc.save(po_pdf)
+                po_doc.close()
+                doc.close()
+                
+            
+            # Split the document
+            po_doc = fitz.open()
+            router_doc = fitz.open()
+            
+            # PO section: pages 0 to split_point-1
+            if split_point > 0:
+                po_doc.insert_pdf(doc, from_page=0, to_page=split_point-1)
+                po_doc.save(po_pdf)
+                logger.info(f"PO section saved (pages 1-{split_point}): {po_pdf}")
+            
+            # Router section: pages split_point to end
+            if split_point < len(doc):
+                router_doc.insert_pdf(doc, from_page=split_point, to_page=len(doc)-1)
+                router_doc.save(router_pdf)
+                logger.info(f"Router section saved (pages {split_point+1}-{len(doc)}): {router_pdf}")
+            
+            po_doc.close()
+            router_doc.close()
+            doc.close()
+            
+            
+        except Exception as e:
+            logger.error(f"Enhanced PDF splitting failed: {e}")
+            return False, f"Splitting failed: {str(e)}"
+
+def main():
+    """Test the improved splitter"""
+    import sys
+    
+    if len(sys.argv) != 4:
+        print("Usage: python improved_pdf_splitting.py input.pdf output_po.pdf output_router.pdf")
+        sys.exit(1)
+    
+    splitter = ImprovedPDFSplitter()
+    success, explanation = splitter.split_pdf_enhanced(sys.argv[1], sys.argv[2], sys.argv[3])
+    
+    print(f"Result: {'SUCCESS' if success else 'FAILED'}")
+    print(f"Explanation: {explanation}")
+
+if __name__ == "__main__":
+    main()

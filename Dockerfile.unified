@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y \
     qpdf \
     curl \
     cron \
+    # Additional dependencies for enhanced splitting
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
@@ -16,7 +23,12 @@ RUN pip install --no-cache-dir \
     ocrmypdf \
     requests \
     urllib3 \
-    python-dateutil
+    python-dateutil \
+    # Enhanced splitting dependencies
+    pdf2image \
+    opencv-python-headless \
+    pytesseract \
+    Pillow
 
 WORKDIR /app
 COPY . /app

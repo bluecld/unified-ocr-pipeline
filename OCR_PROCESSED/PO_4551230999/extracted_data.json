@@ -1,0 +1,23 @@
+{
+  "po_number": "4551230999",
+  "mjo_number": null,
+  "quantity_shipped": "1",
+  "part_number": "Quantity",
+  "delivery_date": "07/17/2025",
+  "whittaker_shipper": "Page",
+  "dpas_ratings": [],
+  "payment_terms": "30 Days from Date of Invoice",
+  "non_standard_payment": false,
+  "quality_clauses": [
+    {
+      "code": "Q15",
+      "description": "Statistical process control documentation"
+    },
+    {
+      "code": "Q15",
+      "description": "Statistical process control documentation"
+    }
+  ],
+  "planner_name": null,
+  "extraction_timestamp": "2025-08-05T21:26:42.178768"
+}
