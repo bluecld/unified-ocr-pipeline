@@ -1,0 +1,22 @@
+# Unified OCR Pipeline Cron Schedule
+# Run every 2 minutes during business hours, every 10 minutes otherwise
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Environment variables
+
+# These variables are set in the Dockerfile or docker-compose.yml
+# and passed to the container environment.
+# They are included here for clarity but are not strictly necessary for cron itself.
+
+# Business hours (7 AM - 6 PM, Mon-Fri): Every 2 minutes
+*/2 7-18 * * 1-5 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1 || echo "Pipeline failed at $(date)" >> /app/logs/cron_errors.log
+
+# Off hours: Every 10 minutes
+*/10 0-6,19-23 * * 1-5 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1 || echo "Pipeline failed at $(date)" >> /app/logs/cron_errors.log
+*/10 * * * 0,6 /app/run_pipeline.sh >> /app/logs/cron.log 2>&1 || echo "Pipeline failed at $(date)" >> /app/logs/cron_errors.log
+
+# Health check - run every 30 minutes
+*/30 * * * * echo "$(date): Cron health check" >> /app/logs/cron.log
+
+# Empty line required at end
