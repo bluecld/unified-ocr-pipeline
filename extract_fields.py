@@ -11,7 +11,8 @@ def extract_fields(text):
         data["PO Number"] = po_match.group(1)
 
     # MJO NO (8+ digits, appears after Part)
-    mjo_match = re.search(r'\b(\d{8,})\b', text)
+    # MJO NO: Find after PART NUMBER line
+    mjo_match = re.search(r'\bOP\d+\s+ASSEMBLY\s+(\d{8,})', text, re.IGNORECASE)
     if mjo_match:
         data["MJO NO"] = mjo_match.group(1)
 
@@ -44,9 +45,10 @@ def extract_fields(text):
     terms_match = re.search(r'Payment Terms[:\-]?\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
     if terms_match:
         terms = terms_match.group(1).strip()
-        data["Payment Terms"] = terms
-        if '30 Days' not in terms:
-            data["NonStandardTerms"] = True
+        if "Ship via" not in terms:  # avoid miscapture
+            data["Payment Terms"] = terms
+            if '30 Days' not in terms:
+                data["NonStandardTerms"] = True
 
     # Quality Clauses
     qcodes = re.findall(r'\bQ(\d{1,3})\b', text)
