@@ -49,3 +49,21 @@ EOF
 else
   echo "[INFO] No Router file found to OCR"
 fi
+
+# === Move final output files to PO-named folder ===
+OCR_TXT_JSON="${PO_OCR%.pdf}_extracted.json"
+PO_NUM=$(jq -r '."PO Number"' "$OCR_TXT_JSON")
+DEST_DIR="OCR_PROCESSED/$PO_NUM"
+
+echo "[INFO] Moving output files to: $DEST_DIR"
+mkdir -p "$DEST_DIR"
+
+# Move known generated files
+mv "$PO_OCR" "$DEST_DIR/" 2>/dev/null || true
+mv "$ROUTER_OCR" "$DEST_DIR/" 2>/dev/null || true
+mv "$OCR_TXT_JSON" "$DEST_DIR/" 2>/dev/null || true
+mv "${PO_OCR%.pdf}.txt" "$DEST_DIR/" 2>/dev/null || true
+
+# Move original input PDF last
+INPUT_FILE="$INPUT"
+mv "$INPUT_FILE" "$DEST_DIR/" 2>/dev/null || true

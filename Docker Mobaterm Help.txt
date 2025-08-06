@@ -1,0 +1,73 @@
+==========================
+ UNIFIED OCR PIPELINE HELP
+==========================
+
+Project path on NAS:
+  /volume1/Main/Main/scripts/unified_ocr_pipeline
+
+Container name/image:
+  unified-ocr
+
+--------------------------
+# 🔧 Build or Rebuild Docker Image
+--------------------------
+cd /volume1/Main/Main/scripts/unified_ocr_pipeline
+
+# Optional: back up Dockerfile before editing
+cp Dockerfile.unified Dockerfile.unified.bak
+
+# If not already added: install jq inside Dockerfile
+sed -i '/apt-get update/a \    jq \\' Dockerfile.unified
+
+# Build the Docker container
+docker build -f Dockerfile.unified -t unified-ocr .
+
+--------------------------
+# 🚀 Run OCR Container for Testing
+--------------------------
+docker run --rm -it \
+  -v /volume1/Main/Main/scripts/unified_ocr_pipeline:/app \
+  unified-ocr \
+  bash
+
+--------------------------
+# 🧪 Run Test Pipeline Inside Container
+--------------------------
+/app/dev_test_runner.sh /app/OCR_INCOMING/<input_pdf_file>
+
+# Example:
+# /app/dev_test_runner.sh /app/OCR_INCOMING/Incoming_07162025_261469.pdf
+
+# Output will go to:
+# /app/OCR_PROCESSED/<PO number>/
+# Includes:
+#   - PO_OCR.pdf
+#   - ROUTER_OCR.pdf
+#   - OCR text (.txt)
+#   - Extracted JSON (.json)
+
+--------------------------
+# 🔍 Check Output Folder on NAS
+--------------------------
+ls OCR_PROCESSED/<PO number>/
+cat OCR_PROCESSED/<PO number>/*_extracted.json
+
+--------------------------
+# 💡 Common Fixes
+--------------------------
+
+# If 'jq: command not found'
+# → Add jq to Dockerfile and rebuild
+
+# If file not found inside /app/
+# → Make sure you placed it in OCR_INCOMING/ on NAS
+
+# If changes made outside container don't show up
+# → You're probably using an old container build — rebuild it
+
+--------------------------
+# 📍 Notes
+--------------------------
+- PO number is used to name output folder
+- JSON is used for FileMaker upload (next step)
+- You can modify dev_test_runner.sh to adjust behavior
