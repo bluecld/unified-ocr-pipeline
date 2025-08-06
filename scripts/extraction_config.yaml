@@ -1,0 +1,28 @@
+# Extraction configuration for future-proofing
+fields:
+  po_number:
+    regex: "\b45\d{8}\b"
+    description: "PO Number: 10 digits starting with 45"
+  mjo_number:
+    regex: "MJO NO[:\s]+(\d+)"
+    description: "Manufacturing Job Order number"
+  quantity_shipped:
+    regex: "Quantity Shipped[:\s]+(\d+)"
+    description: "Quantity shipped"
+  part_number:
+    regex: "Part Number[:\s]+([\w\d\*]+)"
+    description: "Part number with operation code"
+  delivery_date:
+    regex: "Date[:\s]+([\d/]+)"
+    description: "Delivery date in MM/DD/YYYY format"
+  payment_terms:
+    regex: "Payment Terms[:\s]+([\w\s]+)"
+    description: "Payment terms"
+  quality_clauses:
+    regex: "Q\d+"
+    description: "Quality clause codes"
+  planner_name:
+    regex: "Planner[:\s]+([A-Za-z,\s]+)"
+    description: "Planner name"
+ai_prompt: |
+  Extract the following fields from the text: PO Number, MJO Number, Quantity Shipped, Part Number, Delivery Date, Payment Terms, Quality Clauses, Planner Name. Return results as a JSON object with field names as keys.

@@ -18,6 +18,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
+# Modular extraction engines
+from extractors import get_extractor
+
 # Disable SSL warnings for FileMaker connections (if using self-signed certs)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -895,8 +898,11 @@ class UnifiedOCRPipeline:
                 logger.error(f"No text extracted from PO file: {ocr_po_path}")
                 return False
             
-            extractor = FieldExtractor(po_text)
-            extracted_data = extractor.extract_all_fields()
+            # Modular extraction engine selection
+            config_path = os.getenv('EXTRACTION_CONFIG', 'scripts/extraction_config.yaml')
+            engine_type = os.getenv('EXTRACTION_ENGINE', 'ai' if os.getenv('USE_AI', 'false').lower() == 'true' else 'regex')
+            extractor = get_extractor(engine_type, config_path)
+            extracted_data = extractor.extract(po_text)
             
             # Step 5: Create output folder using PO number
             po_number = extracted_data.get('po_number')
