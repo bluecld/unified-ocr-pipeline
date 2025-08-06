@@ -59,7 +59,7 @@ fi
 # Run the Python pipeline
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Executing enhanced pipeline..."
 
-python /app/unified_ocr_pipeline.py
+python scripts/unified_ocr_pipeline.py
 
 PIPELINE_EXIT_CODE=$?
 

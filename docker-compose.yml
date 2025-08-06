@@ -37,7 +37,7 @@ services:
         condition: service_healthy
         required: false
     profiles: ["continuous"]
-    command: ["python3", "/app/unified_ocr_pipeline.py"]
+    command: ["python3", "/app/scripts/unified_ocr_pipeline.py"]
 
   # Cron-based Pipeline (Recommended for production)
   ocr_cron:
@@ -85,7 +85,7 @@ services:
         condition: service_healthy
         required: false
     profiles: ["oneshot", "test"]
-    command: ["python3", "/app/unified_ocr_pipeline.py"]
+    command: ["python3", "/app/scripts/unified_ocr_pipeline.py"]
 
 volumes:
   ollama_data:

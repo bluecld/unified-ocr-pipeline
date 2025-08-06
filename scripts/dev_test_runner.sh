@@ -15,12 +15,12 @@ echo "[INFO] Splitting PDF: $INPUT"
 echo "[INFO] PO will be saved to: $PO_OUT"
 echo "[INFO] Router will be saved to: $ROUTER_OUT"
 
-python3 /app/split_po_router_basic.py "$INPUT" "$PO_OUT" "$ROUTER_OUT"
+ python3 scripts/split_po_router_basic.py "$INPUT" "$PO_OUT" "$ROUTER_OUT"
 
 if [[ $? -eq 0 ]]; then
-  echo "[SUCCESS] Split completed: $(basename "$INPUT")" >> /app/logs/dev_test_runner.log
+  echo "[SUCCESS] Split completed: $(basename "$INPUT")" >> logs/dev_test_runner.log
 else
-  echo "[ERROR] Split failed for: $(basename "$INPUT")" >> /app/logs/dev_test_runner.log
+  echo "[ERROR] Split failed for: $(basename "$INPUT")" >> logs/dev_test_runner.log
 fi
 
 PO_OCR="${PO_OUT%.pdf}_OCR.pdf"

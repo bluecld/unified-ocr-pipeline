@@ -70,5 +70,14 @@ debug_*.txt
 
 # Temporary files
 *.tmp
-*.tempOCR_PROCESSED/*
-!OCR_PROCESSED/.gitkeep
+*.temp
+
+# Ignore logs, outputs, temp files, and backups
+OCR_PROCESSED/
+*.bak2
+*.bak3
+*.zip
+*.txt
+*.pdf
+*.yml.bak
+.ipynb_checkpoints/
