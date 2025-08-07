@@ -140,6 +140,46 @@ class UnifiedOCRPipeline:
                 "has_text": bool(text.strip())
             }
             
+            # Force OCR for first 2 pages if no text found
+            if page_num < 2 and (not text.strip()) and image_list:
+                self.logger.info(f"Forced OCR for page {page_num + 1}")
+                try:
+                    import pytesseract
+                    from PIL import Image
+                    xref = image_list[0][0]
+                    pix = fitz.Pixmap(doc, xref)
+                    if pix.n - pix.alpha < 4:
+                        img_path = output_dir / f"page_{page_num + 1:03d}_ocr.png"
+                        pix.save(str(img_path))
+                        pix = None
+                        self.logger.info(f"Saved image for OCR: {img_path}")
+                        # Run OCR
+                        ocr_text = pytesseract.image_to_string(Image.open(str(img_path)), lang="eng")
+                        self.logger.info(f"OCR result for page {page_num + 1}: {repr(ocr_text[:100])}")
+                        page_result["ocr_text"] = ocr_text
+                        page_result["ocr_text_length"] = len(ocr_text)
+                        # Save OCR text
+                        ocr_text_file = output_dir / f"page_{page_num + 1:03d}_ocr.txt"
+                        ocr_text_file.write_text(ocr_text, encoding='utf-8')
+                        self.logger.info(f"Saved OCR text to: {ocr_text_file}")
+                        # Use OCR text as main text for this page
+                        text = ocr_text
+                        page_result["text"] = text
+                        page_result["text_length"] = len(text)
+                except Exception as e:
+                    self.logger.error(f"OCR failed for page {page_num + 1}: {e}")
+            
+            # PO extraction: try to split off PO number from OCR or text
+            if page_num < 2 and page_result.get("text"):
+                import re
+                po_match = re.search(r"PO\s*Number\s*[:\-]?\s*(\d+)", page_result["text"], re.IGNORECASE)
+                if not po_match:
+                    po_match = re.search(r"Purchase\s*Order\s*[:\-]?\s*(\d+)", page_result["text"], re.IGNORECASE)
+                if po_match:
+                    po_number = po_match.group(1)
+                    page_result["po_number"] = po_number
+                    self.logger.info(f"Extracted PO number from page {page_num + 1}: {po_number}")
+            
             results["pages"].append(page_result)
             results["total_text_length"] += len(text)
             results["total_images"] += len(image_list)
