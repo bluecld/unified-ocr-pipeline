@@ -1,17 +1,9 @@
-# Input/Output directories
-OCR_INCOMING/
-OCRProcessed/
-logs/
-temp/
-
-# Environment files with sensitive data
-.env
-
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -28,21 +20,40 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Virtual environments
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# Docker
-*.log
-.docker/
-docker-compose.override.yml
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# OS generated files
+# OS
 .DS_Store
 .DS_Store?
 ._*
@@ -51,33 +62,13 @@ docker-compose.override.yml
 ehthumbs.db
 Thumbs.db
 
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Backup files
-*.bak
-*.backup
-*.old
-
-# Test files
-test_*.pdf
-sample_*.pdf
-debug_*.txt
-
-# Temporary files
+# Project specific
+input/*.pdf
+output/
+logs/
+*.log
+temp/
 *.tmp
-*.temp
 
-# Ignore logs, outputs, temp files, and backups
-OCR_PROCESSED/
-*.bak2
-*.bak3
-*.zip
-*.txt
-*.pdf
-*.yml.bak
-.ipynb_checkpoints/
+# Docker
+.dockerignore

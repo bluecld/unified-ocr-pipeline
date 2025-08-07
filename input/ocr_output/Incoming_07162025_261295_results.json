@@ -1,0 +1,102 @@
+{
+  "source_file": "/app/input/Incoming_07162025_261295.pdf",
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 2,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 3,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 4,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 5,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 6,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 7,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 8,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 9,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 10,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 11,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 12,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    },
+    {
+      "page_number": 13,
+      "text": "",
+      "text_length": 0,
+      "images_found": 1,
+      "has_text": false
+    }
+  ],
+  "total_pages": 13,
+  "backend": "pymupdf",
+  "total_text_length": 0,
+  "total_images": 13,
+  "processing_time_seconds": 7.912631,
+  "timestamp": "2025-08-07T00:46:27.869820"
+}

@@ -1,0 +1,13 @@
+PURCHASE ORDER #4551234567
+
+MJO NO: MJO-2024-001
+QTY SHIP: 100 EA
+PART NUMBER: 12345*op06
+Promise Delivery Date: 01/15/2024
+DPAS Rating: A1
+Payment Terms: Net 30 Days
+Quality Clauses: Q8, Q10, Q43
+
+ROUTER SECTION
+Operation 10: Mill to dimension
+Operation 20: Drill holes

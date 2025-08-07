@@ -1,0 +1,25 @@
+import os
+from pathlib import Path
+
+# Assuming 'pipeline' is already defined and imported
+# ...
+
+pdf_files = []  # This should be defined based on your application's logic
+
+if pdf_files:
+    # ...existing code...
+else:
+    # Auto-process all PDFs in input directory
+    input_dir = os.getenv("OCR_INCOMING", "/app/incoming")
+    pdfs = list(Path(input_dir).glob("*.pdf"))
+    if pdfs:
+        for pdf_file in pdfs:
+            try:
+                results = pipeline.process_pdf(str(pdf_file))
+                print(f"\n✅ Processed: {pdf_file}")
+                # ...print summary...
+            except Exception as e:
+                print(f"❌ Failed to process {pdf_file}: {e}")
+    else:
+        print("No PDF files found in input directory.")
+        # ...existing usage/health info...
