@@ -449,17 +449,20 @@ class UnifiedOCRPipeline:
             # Look for delivery quantity pattern
             delivery_qty_match = re.search(r"Delivery Date[^\n]*\n[^\n]*Quantity[^\n]*\n[^\n]*?(\d+\.?\d*)", text, re.IGNORECASE | re.DOTALL)
             if delivery_qty_match:
-                return delivery_qty_match.group(1)
+                qty = delivery_qty_match.group(1)
+                return str(int(float(qty)))  # Convert to whole number
             
             # Alternative: look for quantity near EA (each)
             ea_match = re.search(r"(\d+\.?\d*)\s*EA", text, re.IGNORECASE)
             if ea_match:
-                return ea_match.group(1)
+                qty = ea_match.group(1)
+                return str(int(float(qty)))  # Convert to whole number
                 
             # Another pattern: Quantity followed by number
             qty_match = re.search(r"Quantity[:\s]*(\d+\.?\d*)", text, re.IGNORECASE)
             if qty_match:
-                return qty_match.group(1)
+                qty = qty_match.group(1)
+                return str(int(float(qty)))  # Convert to whole number
         return ""
     
     def _extract_part_number_with_op(self, results: Dict[str, Any]) -> str:
@@ -482,6 +485,20 @@ class UnifiedOCRPipeline:
                 if op_code.startswith('OP') or 'OP' in op_code:
                     return f"{part_base}*{op_code}"
         return ""
+
+    def _format_part_number_for_filemaker(self, part_number: str) -> str:
+        """Format part number to FileMaker standard: 139038-2SA*OP20"""
+        if not part_number:
+            return ""
+        
+        import re
+        # If it already has asterisk, return as is
+        if '*' in part_number:
+            return part_number
+            
+        # Convert dash-OP format to asterisk-OP format
+        formatted = re.sub(r'-OP(\d+)$', r'*OP\1', part_number)
+        return formatted
     
     def _extract_dpas_rating(self, results: Dict[str, Any]) -> str:
         """Extract DPAS Rating (can appear multiple times, save last or all)"""
@@ -558,13 +575,34 @@ class UnifiedOCRPipeline:
             ai_extracted = self._query_ollama_for_extraction(combined_text, po_number)
             if ai_extracted:
                 self.logger.info("✅ Used Ollama AI for data extraction")
-                return ai_extracted
+                # Post-process AI-extracted data for FileMaker formatting
+                return self._format_ai_data_for_filemaker(ai_extracted)
         except Exception as e:
             self.logger.warning(f"Ollama AI extraction failed: {e}")
         
         # Fallback to regex extraction
         self.logger.info("📝 Using regex fallback for data extraction")
         return self._fallback_regex_extraction(results, po_number)
+
+    def _format_ai_data_for_filemaker(self, ai_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Format AI-extracted data to meet FileMaker requirements"""
+        if not ai_data:
+            return ai_data
+            
+        # Format part number: change dash-OP to asterisk-OP
+        if "PART_NUMBER" in ai_data:
+            ai_data["PART_NUMBER"] = self._format_part_number_for_filemaker(ai_data["PART_NUMBER"])
+        
+        # Format quantity: convert to whole number
+        if "QTY_SHIP" in ai_data:
+            try:
+                qty = ai_data["QTY_SHIP"]
+                if isinstance(qty, str) and qty:
+                    ai_data["QTY_SHIP"] = str(int(float(qty)))
+            except (ValueError, TypeError):
+                pass  # Keep original if conversion fails
+                
+        return ai_data
     
     def _query_ollama_for_extraction(self, text: str, po_number: str) -> Dict[str, Any]:
         """Query Ollama to extract structured data from PO text"""
@@ -610,7 +648,7 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=600) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
         # First attempt: request structured JSON output
@@ -653,11 +691,14 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
     
     def _fallback_regex_extraction(self, results: Dict[str, Any], po_number: str) -> Dict[str, Any]:
         """Fallback regex-based extraction for FileMaker data"""
+        raw_part_number = self._extract_part_number_with_op(results)
+        formatted_part_number = self._format_part_number_for_filemaker(raw_part_number)
+        
         return {
             "Whittaker_Shipper": po_number,  # PO Number for FileMaker
             "MJO_NO": self._extract_production_order(results),      # Production Order
             "QTY_SHIP": self._extract_quantity_shipped(results),    # Quantity Shipped  
-            "PART_NUMBER": self._extract_part_number_with_op(results),  # Part Number with OP##
+            "PART_NUMBER": formatted_part_number,  # Part Number with OP## formatted for FileMaker
             "Promise_Delivery_Date": self._extract_delivery_date(results),  # Promise Delivery Date
             "DPAS_Rating": self._extract_dpas_rating(results),      # DPAS Rating
             "Payment_Terms_Flag": self._check_payment_terms(results),  # Payment Terms Check
@@ -716,6 +757,9 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
         
         return results
 
+    def sample_logging(self):
+        self.logger.info("Sample logging statement added for demonstration purposes.")
+
 
 def setup_environment():
     """Setup script for fixing PyMuPDF installation"""
@@ -770,22 +814,41 @@ def main():
                 print(f"❌ Failed to process {pdf_file}: {e}")
     else:
         # Auto-process all PDFs in IncomingPW directory
-        input_dir = os.getenv("OCR_INCOMING", "/volume1/Main/Main/IncomingPW/")
+        input_dir = os.getenv("OCR_INCOMING", "/app/IncomingPW")
+        delete_source = os.getenv("DELETE_SOURCE_FILES", "true").lower() == "true"
+        
         pdfs = list(Path(input_dir).glob("*.pdf"))
         if pdfs:
-            print(f"Found {len(pdfs)} PDF(s) in {input_dir}. Starting processing...")
+            print(f"Found {len(pdfs)} PDF(s) in {input_dir}. Processing one by one...")
+            if delete_source:
+                print("🗑️  Source files will be deleted after successful processing")
+            
             for pdf_file in pdfs:
                 try:
+                    print(f"\n🔄 Processing: {pdf_file.name}")
                     results = pipeline.process_pdf(str(pdf_file))
                     po_number = results.get("po_number", "UNKNOWN")
-                    print(f"\n✅ Processed: {pdf_file}")
+                    
+                    print(f"✅ Successfully processed: {pdf_file.name}")
                     print(f"📋 PO Number: {po_number}")
                     print(f"📄 Pages: {results['total_pages']}")
                     print(f"📝 Text length: {results['total_text_length']} characters")
                     print(f"🖼️  Images: {results['total_images']}")
                     print(f"⏱️  Time: {results['processing_time_seconds']:.2f}s")
+                    
+                    # Delete source file after successful processing
+                    if delete_source:
+                        try:
+                            pdf_file.unlink()
+                            print(f"🗑️  Deleted source file: {pdf_file.name}")
+                        except Exception as delete_error:
+                            print(f"⚠️  Could not delete {pdf_file.name}: {delete_error}")
+                            
                 except Exception as e:
-                    print(f"❌ Failed to process {pdf_file}: {e}")
+                    print(f"❌ Failed to process {pdf_file.name}: {e}")
+                    print(f"🔄 Continuing with next file...")
+                    # Do not delete file if processing failed
+                    
         else:
             print("No PDF files found in IncomingPW directory.")
             print("📋 Unified OCR Pipeline")

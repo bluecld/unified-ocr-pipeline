@@ -28,6 +28,6 @@ RUN mkdir -p /app/IncomingPW /app/ProcessedPOs
 # Fix permissions
 RUN chmod +x scripts/unified_ocr_pipeline.py
 
-EXPOSE 8000
+EXPOSE 11434
 
-CMD ["python", "scripts/unified_ocr_pipeline.py"]
+CMD ["python", "scripts/unified_ocr_pipeline.py", "--port", "11434"]

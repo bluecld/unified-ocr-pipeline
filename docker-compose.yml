@@ -1,17 +1,48 @@
+version: '3.8'
+
+networks:
+  ocr_network:
+    driver: bridge
+
 services:
   ocr_oneshot:
     build: .
     container_name: ocr_oneshot
-    network_mode: host
     volumes:
-      - /volume1/Main/Main/IncomingPW:/app/IncomingPW
-      - /volume1/Main/Main/ProcessedPOs:/app/ProcessedPOs
+      - ./input/IncomingPW:/app/IncomingPW
+      - ./output/ProcessedPOs:/app/ProcessedPOs
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
       - OLLAMA_URL=http://localhost:11434
-      - OLLAMA_MODEL=gemma2:2b
+      - OLLAMA_MODEL=llama3.2:3b
       - OCR_INCOMING=/app/IncomingPW
       - OCR_PROCESSED=/app/ProcessedPOs
       - LOG_DIR=/app/logs
     restart: "no"
+    networks:
+      - ocr_network
+  ocr_ollama:
+    build: .
+    container_name: ocr_ollama
+    volumes:
+      - ./input/IncomingPW:/app/IncomingPW
+      - ./output/ProcessedPOs:/app/ProcessedPOs
+      - ./scripts/ollama_entrypoint.sh:/ollama_entrypoint.sh
+    environment:
+      - OLLAMA_MODEL=gemma2:2b
+      - OLLAMA_URL=http://localhost:11434
+      - DELETE_SOURCE_FILES=true
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+          cpus: '4.0'
+        reservations:
+          memory: 4g
+          cpus: '2.0'
+    network_mode: host
+    # ports:
+    #   - "11434:11434"
+    # networks:
+    #   - ocr_network
