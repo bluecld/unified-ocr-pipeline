@@ -1,0 +1,22 @@
+{
+    "terminal.integrated.shellIntegration.enabled": true,
+    "terminal.integrated.shellIntegration.showWelcome": false,
+    "terminal.integrated.shellIntegration.decorationsEnabled": "both",
+    "terminal.integrated.shellIntegration.history": 100,
+    "terminal.integrated.defaultProfile.linux": "sh",
+    "terminal.integrated.profiles.linux": {
+        "sh": {
+            "path": "/bin/sh",
+            "args": ["-l"],
+            "icon": "terminal",
+            "env": {
+                "VSCODE_INJECTION": "1"
+            }
+        }
+    },
+    "terminal.integrated.commandsToSkipShell": [
+        "workbench.action.toggleSidebarVisibility"
+    ],
+    "terminal.integrated.enablePersistentSessions": true,
+    "terminal.integrated.persistentSessionReviveProcess": "onExit"
+}

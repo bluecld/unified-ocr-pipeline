@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p /app/input /app/output
+RUN mkdir -p /app/IncomingPW /app/ProcessedPOs
 
 # Fix permissions
 RUN chmod +x scripts/unified_ocr_pipeline.py

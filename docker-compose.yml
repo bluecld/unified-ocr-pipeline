@@ -2,12 +2,16 @@ services:
   ocr_oneshot:
     build: .
     container_name: ocr_oneshot
+    network_mode: host
     volumes:
-      - ./input:/app/input
-      - ./output:/app/output
+      - /volume1/Main/Main/IncomingPW:/app/IncomingPW
+      - /volume1/Main/Main/ProcessedPOs:/app/ProcessedPOs
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
-    ports:
-      - "8000:8000"
+      - OLLAMA_URL=http://localhost:11434
+      - OLLAMA_MODEL=gemma2:2b
+      - OCR_INCOMING=/app/IncomingPW
+      - OCR_PROCESSED=/app/ProcessedPOs
+      - LOG_DIR=/app/logs
     restart: "no"

@@ -6,8 +6,8 @@
 set -e
 
 # Set default environment variables if not set
-export OCR_INCOMING=${OCR_INCOMING:-"/app/incoming"}
-export OCR_PROCESSED=${OCR_PROCESSED:-"/app/processed"}
+export OCR_INCOMING=${OCR_INCOMING:-"/volume1/Main/Main/IncomingPW/"}
+export OCR_PROCESSED=${OCR_PROCESSED:-"/volume1/Main/Main/ProcessedPOs/"}
 export OCR_LOG_LEVEL=${OCR_LOG_LEVEL:-"INFO"}
 export OLLAMA_HOST=${OLLAMA_HOST:-"http://ollama:11434"}
 export FM_ENABLED=${FM_ENABLED:-"true"}
@@ -59,7 +59,7 @@ fi
 # Run the Python pipeline
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Executing enhanced pipeline..."
 
-python scripts/unified_ocr_pipeline.py
+python3 /volume1/Main/Main/scripts/unified_ocr_pipeline/scripts/unified_ocr_pipeline.py
 
 PIPELINE_EXIT_CODE=$?
 
