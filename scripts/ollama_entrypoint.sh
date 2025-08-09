@@ -2,6 +2,16 @@
 
 # Entrypoint script for ocr_ollama container
 
+# Wait for Ollama to be available
+for i in $(seq 1 30); do
+  if curl -s http://localhost:11434/api/tags >/dev/null; then
+    echo "Ollama is up!"
+    break
+  fi
+  echo "Waiting for Ollama... ($i/30)"
+  sleep 2
+done
+
 # Ensure the IncomingPW directory exists
 if [ ! -d "/app/IncomingPW" ]; then
   echo "Error: /app/IncomingPW directory does not exist."

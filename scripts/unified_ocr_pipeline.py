@@ -435,10 +435,23 @@ class UnifiedOCRPipeline:
         for page in results["pages"]:
             text = page.get("text", "")
             import re
-            # Look for Production Order pattern
+            # Look for Production Order pattern - extract number only
             prod_order_match = re.search(r"Production Order[:\s]*(\d+)", text, re.IGNORECASE)
             if prod_order_match:
-                return prod_order_match.group(1)
+                return prod_order_match.group(1)  # Return only the number
+            
+            # Alternative pattern: look for MJO or similar
+            mjo_match = re.search(r"MJO[:\s#]*(\d+)", text, re.IGNORECASE)
+            if mjo_match:
+                return mjo_match.group(1)
+                
+            # Look for standalone production order numbers
+            po_num_match = re.search(r"(\d{9,12})", text)  # 9-12 digit numbers
+            if po_num_match:
+                num = po_num_match.group(1)
+                # Make sure it's not a PO number (which starts with 45)
+                if not num.startswith('45'):
+                    return num
         return ""
     
     def _extract_quantity_shipped(self, results: Dict[str, Any]) -> str:
@@ -446,23 +459,38 @@ class UnifiedOCRPipeline:
         for page in results["pages"]:
             text = page.get("text", "")
             import re
-            # Look for delivery quantity pattern
-            delivery_qty_match = re.search(r"Delivery Date[^\n]*\n[^\n]*Quantity[^\n]*\n[^\n]*?(\d+\.?\d*)", text, re.IGNORECASE | re.DOTALL)
-            if delivery_qty_match:
-                qty = delivery_qty_match.group(1)
-                return str(int(float(qty)))  # Convert to whole number
             
-            # Alternative: look for quantity near EA (each)
-            ea_match = re.search(r"(\d+\.?\d*)\s*EA", text, re.IGNORECASE)
-            if ea_match:
-                qty = ea_match.group(1)
-                return str(int(float(qty)))  # Convert to whole number
-                
-            # Another pattern: Quantity followed by number
-            qty_match = re.search(r"Quantity[:\s]*(\d+\.?\d*)", text, re.IGNORECASE)
-            if qty_match:
-                qty = qty_match.group(1)
-                return str(int(float(qty)))  # Convert to whole number
+            # Multiple patterns to find quantity shipped
+            patterns = [
+                # Pattern 1: Delivery Date section with quantity
+                r"Delivery Date[^\n]*\n[^\n]*Quantity[^\n]*\n[^\n]*?(\d+\.?\d*)",
+                # Pattern 2: QTY followed by number
+                r"QTY[:\s]*(\d+\.?\d*)",
+                # Pattern 3: Quantity followed by number
+                r"Quantity[:\s]*(\d+\.?\d*)",
+                # Pattern 4: Number followed by EA (each)
+                r"(\d+\.?\d*)\s*EA",
+                # Pattern 5: Ship Qty
+                r"Ship\s*Qty[:\s]*(\d+\.?\d*)",
+                # Pattern 6: Shipped quantity
+                r"Shipped[:\s]*(\d+\.?\d*)",
+                # Pattern 7: Look for number before "EACH" or "EA"
+                r"(\d+\.?\d*)\s*(?:EACH|EA)\b",
+                # Pattern 8: Delivery quantity
+                r"Delivery[^\n]*?(\d+\.?\d*)",
+                # Pattern 9: Any standalone number that could be quantity (last resort)
+                r"\b(\d{1,4})\b(?!\d)"  # 1-4 digits not followed by more digits
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    qty = match.group(1)
+                    try:
+                        # Convert to whole number
+                        return str(int(float(qty)))
+                    except ValueError:
+                        continue
         return ""
     
     def _extract_part_number_with_op(self, results: Dict[str, Any]) -> str:
@@ -593,6 +621,20 @@ class UnifiedOCRPipeline:
         if "PART_NUMBER" in ai_data:
             ai_data["PART_NUMBER"] = self._format_part_number_for_filemaker(ai_data["PART_NUMBER"])
         
+        # Format MJO_NO: extract only the number from "Production Order: 123456"
+        if "MJO_NO" in ai_data and ai_data["MJO_NO"]:
+            import re
+            mjo_text = str(ai_data["MJO_NO"])
+            # Extract just the number from "Production Order: 123456" 
+            match = re.search(r"Production Order[:\s]*(\d+)", mjo_text, re.IGNORECASE)
+            if match:
+                ai_data["MJO_NO"] = match.group(1)
+            else:
+                # Look for standalone number pattern
+                num_match = re.search(r"(\d{8,12})", mjo_text)
+                if num_match:
+                    ai_data["MJO_NO"] = num_match.group(1)
+        
         # Format quantity: convert to whole number
         if "QTY_SHIP" in ai_data:
             try:
@@ -612,6 +654,17 @@ class UnifiedOCRPipeline:
         
         # Check if Ollama is available (default port 11434)
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        
+        # Test connection to Ollama first
+        try:
+            test_req = urllib.request.Request(f"{ollama_url}/api/tags")
+            with urllib.request.urlopen(test_req, timeout=10) as resp:
+                if resp.status != 200:
+                    self.logger.warning(f"Ollama test connection failed with status {resp.status}")
+                    return None
+        except Exception as e:
+            self.logger.warning(f"Ollama connection test failed: {e}")
+            return None
         
         prompt = f"""Extract the following information from this Purchase Order document text and return it as valid JSON:
 
@@ -640,7 +693,7 @@ Document Text:
 Return only valid JSON with the extracted data. If a field is not found, use empty string "".
 """
 
-        def _post_ollama(data: dict) -> dict:
+        def _post_ollama(data: dict, retry_count: int = 0) -> dict:
             payload = json.dumps(data).encode("utf-8")
             req = urllib.request.Request(
                 f"{ollama_url}/api/generate",
@@ -648,10 +701,19 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except (urllib.error.URLError, ConnectionRefusedError) as e:
+                if retry_count < 3:
+                    self.logger.warning(f"Ollama connection failed, retry {retry_count + 1}/3: {e}")
+                    import time
+                    time.sleep(2)
+                    return _post_ollama(data, retry_count + 1)
+                else:
+                    raise e
 
-        # First attempt: request structured JSON output
+        # First attempt: request structured JSON output with retry logic
         try:
             result = _post_ollama({
                 "model": os.getenv("OLLAMA_MODEL", "llama3.1"),
