@@ -5,34 +5,15 @@ networks:
     driver: bridge
 
 services:
-  ocr_oneshot:
-    build: .
-    container_name: ocr_oneshot
-    volumes:
-      - ./input/IncomingPW:/app/IncomingPW
-      - ./output/ProcessedPOs:/app/ProcessedPOs
-      - ./logs:/app/logs
-    environment:
-      - PYTHONUNBUFFERED=1
-      - OLLAMA_URL=http://localhost:11434
-      - OLLAMA_MODEL=llama3.2:3b
-      - OCR_INCOMING=/app/IncomingPW
-      - OCR_PROCESSED=/app/ProcessedPOs
-      - LOG_DIR=/app/logs
-    restart: "no"
-    networks:
-      - ocr_network
   ocr_ollama:
     build: .
     container_name: ocr_ollama
     volumes:
-      - ./input/IncomingPW:/app/IncomingPW
-      - ./output/ProcessedPOs:/app/ProcessedPOs
-      - ./scripts/ollama_entrypoint.sh:/ollama_entrypoint.sh
+      - ./scripts:/app/scripts
+      - ~/.ollama:/root/.ollama
+    entrypoint: ["/app/scripts/ollama_entrypoint.sh"]
     environment:
-      - OLLAMA_MODEL=gemma2:2b
-      - OLLAMA_URL=http://localhost:11434
-      - DELETE_SOURCE_FILES=true
+      - OLLAMA_MODEL=llama3.2:1b  # Faster 1B model for CPU
     deploy:
       resources:
         limits:
@@ -41,8 +22,29 @@ services:
         reservations:
           memory: 4g
           cpus: '2.0'
-    network_mode: host
-    # ports:
-    #   - "11434:11434"
-    # networks:
-    #   - ocr_network
+    ports:
+      - "11434:11434"
+    networks:
+      - ocr_network
+    
+  ocr_oneshot:
+    build: .
+    container_name: ocr_oneshot
+    volumes:
+      - ./input/IncomingPW:/app/IncomingPW
+      - ./output/ProcessedPOs:/app/ProcessedPOs
+      - ./logs:/app/logs
+      - ./scripts:/app/scripts
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_URL=http://ocr_ollama:11434
+      - OLLAMA_MODEL=llama3.2:1b
+      - OCR_INCOMING=/app/IncomingPW
+      - OCR_PROCESSED=/app/ProcessedPOs
+      - LOG_DIR=/app/logs
+      - DELETE_SOURCE_FILES=true
+    networks:
+      - ocr_network
+    depends_on:
+      - ocr_ollama
+    entrypoint: ["/app/scripts/ocr_entrypoint.sh"]

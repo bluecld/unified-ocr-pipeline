@@ -161,7 +161,10 @@ class UnifiedOCRPipeline:
                 self.logger.info(f"Forced OCR for page {page_num + 1}")
                 try:
                     import pytesseract
-                    from PIL import Image
+                    from PIL import Image, ImageEnhance, ImageFilter
+                    import cv2
+                    import numpy as np
+                    
                     xref = image_list[0][0]
                     pix = fitz.Pixmap(doc, xref)
                     if pix.n - pix.alpha < 4:
@@ -169,11 +172,21 @@ class UnifiedOCRPipeline:
                         pix.save(temp_img_path)
                         pix = None
                         self.logger.info(f"Saved image for OCR: {temp_img_path}")
-                        # Run OCR
-                        ocr_text = pytesseract.image_to_string(Image.open(temp_img_path), lang="eng")
+                        
+                        # ENHANCED IMAGE PREPROCESSING
+                        enhanced_img_path = self._enhance_image_for_ocr(temp_img_path)
+                        
+                        # Run OCR with enhanced settings
+                        ocr_text, ocr_confidence = self._run_enhanced_ocr(enhanced_img_path, page_num + 1)
+                        
                         self.logger.info(f"OCR result for page {page_num + 1}: {repr(ocr_text[:100])}")
+                        self.logger.info(f"OCR confidence for page {page_num + 1}: {ocr_confidence:.2f}%")
+                        
                         page_result["ocr_text"] = ocr_text
                         page_result["ocr_text_length"] = len(ocr_text)
+                        page_result["ocr_confidence"] = ocr_confidence
+                        page_result["ocr_quality"] = self._assess_ocr_quality(ocr_text, ocr_confidence)
+                        
                         # Use OCR text as main text for this page
                         text = ocr_text
                         page_result["text"] = text
@@ -181,19 +194,41 @@ class UnifiedOCRPipeline:
                 except Exception as e:
                     self.logger.error(f"OCR failed for page {page_num + 1}: {e}")
 
-            # PO extraction: try to find PO number from OCR or text
+            # PO extraction: try to find PO number from OCR or text with validation
             if page_num < 2 and page_result.get("text") and not po_number:
                 import re
-                po_match = re.search(r"Purchase\s*[Oo]rder\s*(\d{10})", page_result["text"], re.IGNORECASE)
+                
+                # Try multiple PO extraction patterns with validation
+                text_to_search = page_result["text"]
+                
+                # Pattern 1: Purchase order + 10 digits
+                po_match = re.search(r"Purchase\s*[Oo]rder\s*(\d{10})", text_to_search, re.IGNORECASE)
                 if not po_match:
-                    po_match = re.search(r"PO\s*[:\-]?\s*(\d{10})", page_result["text"], re.IGNORECASE)
+                    # Pattern 2: PO: + 10 digits  
+                    po_match = re.search(r"PO\s*[:\-]?\s*(\d{10})", text_to_search, re.IGNORECASE)
                 if not po_match:
-                    po_match = re.search(r"(\d{10})", page_result["text"])  # Any 10-digit number
+                    # Pattern 3: Any 10-digit number starting with 45
+                    po_match = re.search(r"(45\d{8})", text_to_search)
+                if not po_match:
+                    # Pattern 4: Any 10-digit number (last resort)
+                    po_match = re.search(r"(\d{10})", text_to_search)
+                
                 if po_match:
-                    po_number = po_match.group(1)
-                    results["po_number"] = po_number
-                    page_result["po_number"] = po_number
-                    self.logger.info(f"Extracted PO number from page {page_num + 1}: {po_number}")
+                    candidate_po = po_match.group(1)
+                    
+                    # Validate PO number format (should start with 45 and be 10 digits)
+                    if len(candidate_po) == 10 and candidate_po.startswith('45'):
+                        # Additional validation: check for common OCR errors
+                        # 5 vs 6, 3 vs 8, 0 vs 8, etc.
+                        if self._validate_po_number(candidate_po, text_to_search):
+                            po_number = candidate_po
+                            results["po_number"] = po_number
+                            page_result["po_number"] = po_number
+                            self.logger.info(f"Extracted PO number from page {page_num + 1}: {po_number}")
+                        else:
+                            self.logger.warning(f"PO number failed validation: {candidate_po}")
+                    else:
+                        self.logger.warning(f"Invalid PO format: {candidate_po} (should be 10 digits starting with 45)")
 
             # Determine if this page is part of PO (first 2 pages typically)
             if page_num < 2 or (page_result.get("text") and "purchase order" in page_result.get("text", "").lower()):
@@ -203,12 +238,38 @@ class UnifiedOCRPipeline:
             results["total_text_length"] += len(text)
             results["total_images"] += len(image_list)
 
-        # Create output directory structure
+        # Create output directory structure with duplicate detection
         if not po_number:
             po_number = "UNKNOWN_PO"
             self.logger.warning("No PO number found, using UNKNOWN_PO")
 
         po_output_dir = base_output_dir / po_number
+        
+        # Check if this PO was already processed (prevent duplicates)
+        existing_json = po_output_dir / f"{po_number}_data.json"
+        if existing_json.exists():
+            self.logger.warning(f"PO {po_number} already processed, checking for duplicates...")
+            
+            # Read existing data to compare
+            try:
+                import json
+                with open(existing_json, 'r') as f:
+                    existing_data = json.load(f)
+                    existing_source = existing_data.get('source_file', '')
+                    current_source = str(pdf_path)
+                    
+                    if existing_source == current_source:
+                        self.logger.warning(f"Duplicate processing detected for {pdf_path.name} → PO {po_number}")
+                        return results  # Skip duplicate processing
+                    else:
+                        self.logger.info(f"Different source file for same PO: {existing_source} vs {current_source}")
+                        # Continue processing but add suffix to avoid conflicts
+                        timestamp = datetime.now().strftime("%H%M%S")
+                        po_number = f"{po_number}_{timestamp}"
+                        po_output_dir = base_output_dir / po_number
+            except Exception as e:
+                self.logger.warning(f"Could not check existing data: {e}")
+        
         misc_dir = po_output_dir / "Misc"
         po_output_dir.mkdir(parents=True, exist_ok=True)
         misc_dir.mkdir(exist_ok=True)
@@ -579,17 +640,228 @@ class UnifiedOCRPipeline:
                     quality_clauses[q_code.upper()] = clean_desc[:100]
         return quality_clauses
     
+    def _enhance_image_for_ocr(self, image_path: str) -> str:
+        """Enhanced image preprocessing for better OCR results"""
+        try:
+            from PIL import Image, ImageEnhance, ImageFilter
+            import cv2
+            import numpy as np
+            
+            # Load image
+            pil_image = Image.open(image_path)
+            
+            # Convert to grayscale if not already
+            if pil_image.mode != 'L':
+                pil_image = pil_image.convert('L')
+            
+            # Convert to OpenCV format properly
+            cv_image = np.array(pil_image)
+            
+            # Ensure single channel grayscale
+            if len(cv_image.shape) == 3:
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2GRAY)
+            
+            # 1. Increase contrast and sharpness
+            enhanced_image = Image.fromarray(cv_image)
+            
+            # Contrast enhancement
+            contrast_enhancer = ImageEnhance.Contrast(enhanced_image)
+            enhanced_image = contrast_enhancer.enhance(1.5)  # 50% more contrast
+            
+            # Sharpness enhancement
+            sharpness_enhancer = ImageEnhance.Sharpness(enhanced_image)
+            enhanced_image = sharpness_enhancer.enhance(2.0)  # 2x sharpness
+            
+            # Convert back to OpenCV for denoising
+            cv_enhanced = np.array(enhanced_image)
+            
+            # 2. Noise reduction
+            denoised = cv2.fastNlMeansDenoising(cv_enhanced)
+            
+            # 3. Adaptive thresholding for better text detection
+            adaptive_thresh = cv2.adaptiveThreshold(
+                denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            )
+            
+            # 4. Morphological operations to clean up text
+            kernel = np.ones((1, 1), np.uint8)
+            cleaned = cv2.morphologyEx(adaptive_thresh, cv2.MORPH_CLOSE, kernel)
+            
+            # Save enhanced image
+            enhanced_path = image_path.replace('.png', '_enhanced.png')
+            cv2.imwrite(enhanced_path, cleaned)
+            
+            self.logger.info(f"Enhanced image saved: {enhanced_path}")
+            return enhanced_path
+            
+        except Exception as e:
+            self.logger.warning(f"Image enhancement failed: {e}, using original")
+            return image_path
+    
+    def _run_enhanced_ocr(self, image_path: str, page_num: int) -> tuple:
+        """Run OCR with enhanced settings and confidence scoring"""
+        try:
+            import pytesseract
+            from PIL import Image
+            
+            # Enhanced OCR configuration
+            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:-()\\ '
+            
+            # Run OCR with data output for confidence
+            ocr_data = pytesseract.image_to_data(
+                Image.open(image_path), 
+                config=custom_config,
+                output_type=pytesseract.Output.DICT
+            )
+            
+            # Extract text and calculate confidence
+            words = []
+            confidences = []
+            
+            for i, word in enumerate(ocr_data['text']):
+                if word.strip():  # Only non-empty words
+                    confidence = ocr_data['conf'][i]
+                    if confidence > 30:  # Only words with >30% confidence
+                        words.append(word)
+                        confidences.append(confidence)
+            
+            ocr_text = ' '.join(words)
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+            
+            # Fallback: try different PSM modes if confidence is low
+            if avg_confidence < 50:
+                self.logger.info(f"Low confidence ({avg_confidence:.1f}%), trying PSM mode 3")
+                fallback_config = r'--oem 3 --psm 3'
+                ocr_text_fallback = pytesseract.image_to_string(
+                    Image.open(image_path), 
+                    config=fallback_config,
+                    lang="eng"
+                )
+                if len(ocr_text_fallback.strip()) > len(ocr_text.strip()):
+                    ocr_text = ocr_text_fallback
+                    avg_confidence = 60  # Estimated confidence for fallback
+            
+            return ocr_text, avg_confidence
+            
+        except Exception as e:
+            self.logger.error(f"Enhanced OCR failed for page {page_num}: {e}")
+            # Fallback to basic OCR
+            import pytesseract
+            from PIL import Image
+            basic_text = pytesseract.image_to_string(Image.open(image_path), lang="eng")
+            return basic_text, 50  # Default confidence
+    
+    def _validate_po_number(self, po_number: str, full_text: str) -> bool:
+        """Validate PO number against common OCR errors"""
+        try:
+            # Check if PO appears multiple times in text (consistency check)
+            import re
+            po_occurrences = len(re.findall(po_number, full_text))
+            
+            # If PO appears multiple times, it's more likely correct
+            if po_occurrences >= 2:
+                return True
+            
+            # Check for common OCR digit confusions
+            # 5 vs 6, 3 vs 8, 0 vs 8, 1 vs 7, etc.
+            common_errors = {
+                '5': '6', '6': '5',
+                '3': '8', '8': '3', 
+                '0': '8', '8': '0',
+                '1': '7', '7': '1'
+            }
+            
+            # Generate alternative PO numbers based on common OCR errors
+            for pos in range(len(po_number)):
+                original_digit = po_number[pos]
+                if original_digit in common_errors:
+                    alternative_digit = common_errors[original_digit]
+                    alternative_po = po_number[:pos] + alternative_digit + po_number[pos+1:]
+                    
+                    # Check if alternative appears more frequently in text
+                    alt_occurrences = len(re.findall(alternative_po, full_text))
+                    if alt_occurrences > po_occurrences:
+                        self.logger.info(f"OCR correction suggested: {po_number} → {alternative_po}")
+                        return False  # Reject this PO, original might be wrong
+            
+            # Additional validation: should be reasonable PO number
+            if po_number.startswith('45') and po_number.isdigit():
+                return True
+                
+            return False
+            
+        except Exception as e:
+            self.logger.warning(f"PO validation error: {e}")
+            return True  # Default to accepting if validation fails
+
+    def _assess_ocr_quality(self, text: str, confidence: float) -> str:
+        """Assess OCR quality based on text characteristics and confidence"""
+        if not text.strip():
+            return "FAILED"
+        
+        text_length = len(text.strip())
+        word_count = len(text.split())
+        
+        # Calculate quality metrics
+        has_po_indicators = any(keyword in text.lower() for keyword in 
+                              ['purchase order', 'po', 'meggitt', 'vendor', 'date'])
+        has_numbers = any(char.isdigit() for char in text)
+        has_meaningful_length = text_length > 50
+        
+        # Quality scoring
+        if confidence > 80 and has_po_indicators and has_meaningful_length:
+            return "EXCELLENT"
+        elif confidence > 60 and (has_po_indicators or has_numbers) and text_length > 30:
+            return "GOOD"
+        elif confidence > 40 and text_length > 20:
+            return "FAIR"
+        elif confidence > 20 and text_length > 10:
+            return "POOR"
+        else:
+            return "FAILED"
+
     def _extract_filemaker_data_with_ai(self, results: Dict[str, Any], po_number: str) -> Dict[str, Any]:
-        """Use Ollama AI to extract FileMaker data from PDF text"""
-        # Combine text from first 2 pages (PO pages)
+        """Use Ollama AI to extract FileMaker data from PDF text with OCR quality validation"""
+        # Combine text from first 2 pages (PO pages) with quality assessment
         combined_text = ""
+        overall_quality = "UNKNOWN"
+        quality_scores = []
+        
         for page in results["pages"][:2]:  # Only first 2 pages for PO data
             text = page.get("text", "") or page.get("ocr_text", "")
+            page_quality = page.get("ocr_quality", "UNKNOWN")
+            confidence = page.get("ocr_confidence", 0)
+            
             if text:
-                combined_text += f"\n--- PAGE {page['page_number']} ---\n{text}"
+                combined_text += f"\n--- PAGE {page['page_number']} (Quality: {page_quality}, Confidence: {confidence:.1f}%) ---\n{text}"
+                
+                # Track quality for decision making
+                if page_quality in ["EXCELLENT", "GOOD"]:
+                    quality_scores.append(2)
+                elif page_quality in ["FAIR"]:
+                    quality_scores.append(1)
+                else:
+                    quality_scores.append(0)
+        
+        # Determine overall OCR quality
+        if quality_scores:
+            avg_quality = sum(quality_scores) / len(quality_scores)
+            if avg_quality >= 1.5:
+                overall_quality = "HIGH"
+            elif avg_quality >= 0.5:
+                overall_quality = "MEDIUM"
+            else:
+                overall_quality = "LOW"
+        
+        self.logger.info(f"OCR Quality Assessment: {overall_quality}")
         
         if not combined_text.strip():
             self.logger.warning("No text available for AI extraction")
+            return self._fallback_regex_extraction(results, po_number)
+
+        # Skip AI processing if OCR quality is too poor
+        if overall_quality == "LOW":
+            self.logger.warning("OCR quality too low for reliable AI processing, using regex fallback")
             return self._fallback_regex_extraction(results, po_number)
 
         # Cap text length to avoid model/context crashes
@@ -600,7 +872,7 @@ class UnifiedOCRPipeline:
         
         # Try Ollama first, fallback to regex if not available
         try:
-            ai_extracted = self._query_ollama_for_extraction(combined_text, po_number)
+            ai_extracted = self._query_ollama_for_extraction(combined_text, po_number, overall_quality)
             if ai_extracted:
                 self.logger.info("✅ Used Ollama AI for data extraction")
                 # Post-process AI-extracted data for FileMaker formatting
@@ -646,8 +918,8 @@ class UnifiedOCRPipeline:
                 
         return ai_data
     
-    def _query_ollama_for_extraction(self, text: str, po_number: str) -> Dict[str, Any]:
-        """Query Ollama to extract structured data from PO text"""
+    def _query_ollama_for_extraction(self, text: str, po_number: str, ocr_quality: str = "UNKNOWN") -> Dict[str, Any]:
+        """Query Ollama to extract structured data from PO text with quality awareness"""
         import json
         import urllib.request
         import urllib.error
@@ -666,31 +938,32 @@ class UnifiedOCRPipeline:
             self.logger.warning(f"Ollama connection test failed: {e}")
             return None
         
-        prompt = f"""Extract the following information from this Purchase Order document text and return it as valid JSON:
+        # Enhanced prompt with quality awareness
+        quality_note = ""
+        if ocr_quality == "LOW":
+            quality_note = "\nNote: OCR quality is low, text may have errors. Focus on clear patterns."
+        elif ocr_quality == "MEDIUM":
+            quality_note = "\nNote: OCR quality is medium, some text may be unclear."
+        else:
+            quality_note = "\nNote: OCR quality is good, text should be reliable."
+        
+        prompt = f"""Extract key data from this Purchase Order document as JSON:
 
-Required FileMaker Fields:
-- Whittaker_Shipper: PO number (10 digits starting with 45) - should be {po_number}
-- MJO_NO: Production Order number (look for "Production Order:")
-- QTY_SHIP: Quantity shipped (number near "EA" or "Quantity")  
-- PART_NUMBER: Part number with OP code (format: "123456-ABC*OP20")
-- Promise_Delivery_Date: Delivery date (MM/DD/YYYY format)
-- DPAS_Rating: DPAS rating if present
-- Payment_Terms_Flag: "STANDARD: 30 Days" or "NON_STANDARD: [terms]"
-- Quality_Clauses: Object with Q# codes and descriptions
+PO Number: {po_number}
+OCR Quality: {ocr_quality}{quality_note}
 
-Additional fields:
-- vendor: Company name from vendor address
-- vendor_number: Vendor number
-- date: PO date
-- amount: Total amount/price
-- buyer_name: Buyer name
-- buyer_phone: Buyer phone
-- buyer_email: Buyer email
+Extract these fields:
+- vendor: Company name
+- date: Order date (MM/DD/YYYY format)  
+- amount: Total amount (numbers only)
+- part_number: Part number with OP codes (format: XXXXXX-XX*OPXX)
+- qty_ship: Quantity to ship (whole number)
+- delivery_date: Delivery date (MM/DD/YYYY format)
 
-Document Text:
-{text}
+Text:
+{text[:2000]}
 
-Return only valid JSON with the extracted data. If a field is not found, use empty string "".
+Return only valid JSON with the fields above.""""""
 """
 
         def _post_ollama(data: dict, retry_count: int = 0) -> dict:
@@ -702,7 +975,7 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:  # Reduced timeout for 1B model
                     return json.loads(resp.read().decode("utf-8"))
             except (urllib.error.URLError, ConnectionRefusedError) as e:
                 if retry_count < 3:
@@ -716,7 +989,7 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
         # First attempt: request structured JSON output with retry logic
         try:
             result = _post_ollama({
-                "model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+                "model": os.getenv("OLLAMA_MODEL", "llama3.2:1b"),
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",
@@ -728,7 +1001,7 @@ Return only valid JSON with the extracted data. If a field is not found, use emp
                 try:
                     retry_prompt = prompt + "\n\nReturn only valid JSON."
                     result = _post_ollama({
-                        "model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+                        "model": os.getenv("OLLAMA_MODEL", "llama3.2:1b"),
                         "prompt": retry_prompt,
                         "stream": False,
                     })

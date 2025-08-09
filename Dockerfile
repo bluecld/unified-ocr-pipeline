@@ -9,7 +9,12 @@ RUN apt-get update && apt-get install -y \
     poppler-utils \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -26,8 +31,10 @@ COPY . .
 RUN mkdir -p /app/IncomingPW /app/ProcessedPOs
 
 # Fix permissions
-RUN chmod +x scripts/unified_ocr_pipeline.py
+RUN chmod +x scripts/unified_ocr_pipeline.py && \
+    chmod +x scripts/ollama_entrypoint.sh && \
+    chmod +x scripts/ocr_entrypoint.sh
 
 EXPOSE 11434
 
-CMD ["python", "scripts/unified_ocr_pipeline.py", "--port", "11434"]
+ENTRYPOINT ["bash", "scripts/ollama_entrypoint.sh"]

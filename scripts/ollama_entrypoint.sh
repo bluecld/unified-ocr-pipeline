@@ -1,41 +1,46 @@
 #!/bin/bash
 
-# Entrypoint script for ocr_ollama container
+echo "Starting Ollama service..."
+
+# Set Ollama to listen on all interfaces for Docker networking
+export OLLAMA_HOST=0.0.0.0:11434
+
+# Start Ollama in the background
+ollama serve &
 
 # Wait for Ollama to be available
-for i in $(seq 1 30); do
-  if curl -s http://localhost:11434/api/tags >/dev/null; then
-    echo "Ollama is up!"
+echo "Waiting for Ollama to start..."
+for i in $(seq 1 60); do
+  if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo "Ollama is ready!"
     break
   fi
-  echo "Waiting for Ollama... ($i/30)"
-  sleep 2
+  echo "Waiting for Ollama... ($i/60)"
+  sleep 3
 done
 
-# Ensure the IncomingPW directory exists
-if [ ! -d "/app/IncomingPW" ]; then
-  echo "Error: /app/IncomingPW directory does not exist."
+# Check if Ollama started successfully
+if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+  echo "ERROR: Ollama failed to start after 3 minutes"
   exit 1
 fi
 
-# Check for PDF files in the IncomingPW directory
-PDF_FILES=$(ls /app/IncomingPW/*.pdf 2>/dev/null)
-
-if [ -z "$PDF_FILES" ]; then
-  echo "No PDF files found in /app/IncomingPW."
-  exit 0
+# Pull the model if it doesn't exist
+echo "Checking for model: ${OLLAMA_MODEL:-llama3.2:1b}"
+if ! ollama list | grep -q "${OLLAMA_MODEL:-llama3.2:1b}"; then
+  echo "Pulling model: ${OLLAMA_MODEL:-llama3.2:1b}"
+  ollama pull "${OLLAMA_MODEL:-llama3.2:1b}"
 fi
 
-# Process each PDF file
-for PDF in $PDF_FILES; do
-  echo "Processing PDF: $PDF"
-  python3 /app/scripts/unified_ocr_pipeline.py "$PDF"
-  if [ $? -ne 0 ]; then
-    echo "Error processing $PDF"
-  else
-    echo "Successfully processed $PDF"
+echo "Ollama service is ready and model is available"
+
+# Keep the container running and maintain the AI service
+while true; do
+  sleep 30
+  
+  # Health check
+  if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo "ERROR: Ollama service stopped unexpectedly"
+    exit 1
   fi
 done
-
-# Exit successfully
-exit 0
